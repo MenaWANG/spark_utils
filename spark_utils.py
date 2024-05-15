@@ -1,5 +1,5 @@
 from pyspark.sql import DataFrame
-from pyspark.sql.functions import col
+from pyspark.sql.functions import col, count, round
 
 
 def shape(df: DataFrame):
@@ -76,3 +76,110 @@ def is_primary_key(df: DataFrame, cols: list) -> bool:
         print(f"The column(s) {', '.join(cols)} does not form a primary key.")
         return False
 
+def find_duplicates(df, cols):
+    """
+    Function to find duplicate rows in a Spark DataFrame based on specified columns.
+
+    Args:
+    - df: PySpark DataFrame
+    - cols: List of column names to check for duplicates
+
+    Returns:
+    - duplicates: PySpark DataFrame containing duplicate rows based on the specified columns,
+                  with the specified columns and the 'count' column as the first columns,
+                  along with the rest of the columns from the original DataFrame
+    """
+    # Filter out rows with missing values in any of the specified columns
+    for col_name in cols:
+        df = df.filter(col(col_name).isNotNull())
+
+    # Group by the specified columns and count the occurrences
+    dup_counts = df.groupBy(*cols).count()
+    
+    # Filter to retain only the rows with count greater than 1
+    duplicates = dup_counts.filter(col("count") > 1)
+    
+    # Join with the original DataFrame to include all columns
+    duplicates = duplicates.join(df, cols, "inner")
+    
+    # Reorder columns with 'count' as the first column
+    duplicate_cols = ['count'] + cols
+    duplicates = duplicates.select(*duplicate_cols, *[c for c in df.columns if c not in cols])
+    
+    return duplicates
+
+def cols_responsible_for_id_dups(spark_df, id_list):
+    
+    """
+    This diagnostic function takes a long time to run. Basically it checks each column for each unique id combinations to see whether there are differences, and summarize the result for all the non-id columns.
+    It generates a summary table indicating the columns and their respective difference counts
+    when the specified ID columns have the same values. This can be used to identify columns 
+    responsible for duplicates for any given ID combinations in id_list.
+
+    Args:
+    - spark_df (DataFrame): The Spark DataFrame to analyze.
+    - id_list (list): A list of column names representing the ID columns.
+
+    Returns:
+    - summary_table (DataFrame): A Spark DataFrame containing two columns - 'col_name' and 
+      'difference_counts'. 'col_name' represents the column name, and 'difference_counts' 
+      represents the count of differing values for each column when ID columns have the same values.
+    """
+    # Get or create the SparkSession
+    from pyspark.sql import SparkSession
+    spark = SparkSession.builder.getOrCreate()
+    
+    # Filter out rows with missing values in any of the ID columns
+    filtered_df = spark_df.na.drop(subset=id_list)
+    
+    # Define a function to count differences within a column for unique id_list combinations
+    def count_differences(col_name):
+        """
+        Counts the number of differing values for a given column when ID columns have the same values.
+
+        Args:
+        - col_name (str): The name of the column to analyze.
+
+        Returns:
+        - count (int): The count of differing values.
+        """
+        # Count the number of distinct values for each combination of ID columns and current column
+        distinct_count = filtered_df.groupBy(*id_list, col_name).count().groupBy(*id_list).count()
+        return distinct_count.filter(col("count") > 1).count()
+    
+    # Get the column names excluding the ID columns
+    value_cols = [col_name for col_name in spark_df.columns if col_name not in id_list]
+    
+    # Create a DataFrame to store the summary table
+    summary_data = [(col_name, count_differences(col_name)) for col_name in value_cols]
+    summary_table = spark.createDataFrame(summary_data, ["col_name", "difference_counts"])
+
+    # Sort the summary_table by "difference_counts" from large to small
+    summary_table = summary_table.orderBy(col("difference_counts").desc()) 
+        
+    return summary_table
+
+
+def value_counts_with_pct(df, column_name):
+    """
+    Calculate the count and percentage of occurrences for each unique value in the specified column.
+
+    Parameters:
+    - df (DataFrame): The DataFrame containing the data.
+    - column_name (str): The name of the column for which to calculate value counts.
+
+    Returns:
+    - DataFrame: A DataFrame containing two columns: the unique values in the specified column and their corresponding count and percentage.
+    """
+    counts = df.groupBy(column_name).agg(
+        count("*").alias("count"),
+        (count("*") / df.count() * 100).alias("pct")
+    )
+
+    counts = counts.withColumn("pct", round(col("pct"), 2))
+
+    counts = counts.orderBy(col("count").desc())
+
+    counts.show()
+
+    return counts
