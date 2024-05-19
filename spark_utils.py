@@ -1,5 +1,6 @@
 from pyspark.sql import DataFrame
-from pyspark.sql.functions import col, count, round
+from pyspark.sql.functions import col, count, round, format_string,  lower
+from functools import reduce
 
 
 def shape(df: DataFrame):
@@ -105,25 +106,30 @@ def find_duplicates(df, cols):
     # Reorder columns with 'count' as the first column
     duplicate_cols = ['count'] + cols
     duplicates = duplicates.select(*duplicate_cols, *[c for c in df.columns if c not in cols])
+
+    # Sort the result by the specified columns
+    duplicates = duplicates.orderBy(*cols)
     
     return duplicates
 
 def cols_responsible_for_id_dups(spark_df, id_list):
     
     """
-    This diagnostic function takes a long time to run. Basically it checks each column for each unique id combinations to see whether there are differences, and summarize the result for all the non-id columns.
-    It generates a summary table indicating the columns and their respective difference counts
-    when the specified ID columns have the same values. This can be used to identify columns 
-    responsible for duplicates for any given ID combinations in id_list.
+    This diagnostic function checks each column 
+    for each unique id combinations to see whether there are differences, 
+    then generates a summary table. 
+    This can be used to identify columns responsible for most duplicates
+    and help with troubleshooting.
 
     Args:
     - spark_df (DataFrame): The Spark DataFrame to analyze.
     - id_list (list): A list of column names representing the ID columns.
 
     Returns:
-    - summary_table (DataFrame): A Spark DataFrame containing two columns - 'col_name' and 
-      'difference_counts'. 'col_name' represents the column name, and 'difference_counts' 
-      represents the count of differing values for each column when ID columns have the same values.
+    - summary_table (DataFrame): A Spark DataFrame containing two columns 
+      'col_name' and 'difference_counts'. 
+      It represents the count of differing values for each column 
+      across all unique ID column combinations.
     """
     # Get or create the SparkSession
     from pyspark.sql import SparkSession
@@ -135,7 +141,7 @@ def cols_responsible_for_id_dups(spark_df, id_list):
     # Define a function to count differences within a column for unique id_list combinations
     def count_differences(col_name):
         """
-        Counts the number of differing values for a given column when ID columns have the same values.
+        Counts the number of differing values for each col_name.
 
         Args:
         - col_name (str): The name of the column to analyze.
@@ -160,6 +166,33 @@ def cols_responsible_for_id_dups(spark_df, id_list):
     return summary_table
 
 
+def filter_df_by_strings(df, col_name, search_strings):
+    """
+    Filter a DataFrame to find rows where the specified column contains 
+    any of the given strings (case-insensitive).
+
+    Args:
+        df (DataFrame): The DataFrame to filter.
+        col_name (str): The name of the column in which to search for the strings.
+        search_strings (list of str): The list of strings to search for (case-insensitive).
+
+    Returns:
+        DataFrame: A new DataFrame containing only the rows where the specified column contains any of the search strings.
+    """
+    # Convert the search strings to lowercase
+    search_strings_lower = [search_string.lower() for search_string in search_strings]
+    
+    # Construct the filter condition for each search string
+    filter_conditions = [lower(col(col_name)).contains(search_string_lower) for search_string_lower in search_strings_lower]
+    
+    # Combine the filter conditions using OR
+    combined_filter = reduce(lambda a, b: a | b, filter_conditions)
+    
+    # Filter the DataFrame
+    filtered_df = df.filter(combined_filter)
+    
+    return filtered_df
+
 def value_counts_with_pct(df, column_name):
     """
     Calculate the count and percentage of occurrences for each unique value in the specified column.
@@ -180,6 +213,9 @@ def value_counts_with_pct(df, column_name):
 
     counts = counts.orderBy(col("count").desc())
 
-    counts.show()
+    # Format count column with comma spacing for printing
+    formatted_counts = counts.withColumn("count", format_string("%,d", col("count")))
+    formatted_counts.show()
 
+    # Return counts DataFrame with raw numbers
     return counts
