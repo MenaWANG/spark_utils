@@ -1,6 +1,7 @@
 from pyspark.sql import DataFrame
 from pyspark.sql.functions import col, count, round, format_string,  lower
 from functools import reduce
+from typing import List
 
 
 def shape(df: DataFrame):
@@ -32,7 +33,7 @@ def print_schema_alphabetically(df: DataFrame):
     sorted_df = df.select(sorted_columns)
     sorted_df.printSchema()
 
-def is_primary_key(df: DataFrame, cols: list) -> bool:
+def is_primary_key(df: DataFrame, cols: List[str]) -> bool:
     """
     Check if the combination of specified columns forms a primary key in the DataFrame.
 
@@ -77,16 +78,16 @@ def is_primary_key(df: DataFrame, cols: list) -> bool:
         print(f"The column(s) {', '.join(cols)} does not form a primary key.")
         return False
 
-def find_duplicates(df, cols):
+def find_duplicates(df: DataFrame, cols: List[str]) -> DataFrame:
     """
-    Function to find duplicate rows in a Spark DataFrame based on specified columns.
+    Function to find duplicate rows based on specified columns.
 
     Args:
-    - df: PySpark DataFrame
-    - cols: List of column names to check for duplicates
+    - df (DataFrame): The DataFrame to check.
+    - cols (list): List of column names to check for duplicates
 
     Returns:
-    - duplicates: PySpark DataFrame containing duplicate rows based on the specified columns,
+    - duplicates (DataFrame): PySpark DataFrame containing duplicate rows based on the specified columns,
                   with the specified columns and the 'count' column as the first columns,
                   along with the rest of the columns from the original DataFrame
     """
@@ -112,7 +113,7 @@ def find_duplicates(df, cols):
     
     return duplicates
 
-def cols_responsible_for_id_dups(spark_df, id_list):
+def cols_responsible_for_id_dups(spark_df: DataFrame, id_list: List[str]) -> DataFrame:
     
     """
     This diagnostic function checks each column 
@@ -166,7 +167,7 @@ def cols_responsible_for_id_dups(spark_df, id_list):
     return summary_table
 
 
-def filter_df_by_strings(df, col_name, search_strings):
+def filter_df_by_strings(df:DataFrame, col_name:str, search_strings: List[str]) -> DataFrame:
     """
     Filter a DataFrame to find rows where the specified column contains 
     any of the given strings (case-insensitive).
@@ -193,7 +194,7 @@ def filter_df_by_strings(df, col_name, search_strings):
     
     return filtered_df
 
-def value_counts_with_pct(df, column_name):
+def value_counts_with_pct(df:DataFrame, column_name:str) -> DataFrame:
     """
     Calculate the count and percentage of occurrences for each unique value in the specified column.
 
