@@ -37,7 +37,7 @@ def is_primary_key(df: DataFrame, cols: List[str]) -> bool:
     """
     Check if the combination of specified columns forms a primary key in the DataFrame.
 
-    Args:
+    Parameters:
         df (DataFrame): The DataFrame to check.
         cols (list): A list of column names to check for forming a primary key.
 
@@ -82,7 +82,7 @@ def find_duplicates(df: DataFrame, cols: List[str]) -> DataFrame:
     """
     Function to find duplicate rows based on specified columns.
 
-    Args:
+    Parameters:
     - df (DataFrame): The DataFrame to check.
     - cols (list): List of column names to check for duplicates
 
@@ -122,7 +122,7 @@ def cols_responsible_for_id_dups(spark_df: DataFrame, id_list: List[str]) -> Dat
     This can be used to identify columns responsible for most duplicates
     and help with troubleshooting.
 
-    Args:
+    Parameters:
     - spark_df (DataFrame): The Spark DataFrame to analyze.
     - id_list (list): A list of column names representing the ID columns.
 
@@ -144,7 +144,7 @@ def cols_responsible_for_id_dups(spark_df: DataFrame, id_list: List[str]) -> Dat
         """
         Counts the number of differing values for each col_name.
 
-        Args:
+        Parameters:
         - col_name (str): The name of the column to analyze.
 
         Returns:
@@ -172,7 +172,7 @@ def filter_df_by_strings(df:DataFrame, col_name:str, search_strings: List[str]) 
     Filter a DataFrame to find rows where the specified column contains 
     any of the given strings (case-insensitive).
 
-    Args:
+    Parameters:
         df (DataFrame): The DataFrame to filter.
         col_name (str): The name of the column in which to search for the strings.
         search_strings (list of str): The list of strings to search for (case-insensitive).
