@@ -14,10 +14,10 @@ Welcome to `spark_utils`, a collection of utility functions for making PySpark d
 
 ## What's Inside?
 
-Our `spark_utils` module is packed with useful functions for common PySpark tasks. Here's a sneak peek at some of the goodies you'll find:
+The `spark_utils` module is packed with useful functions for common PySpark tasks. Here's a sneak peek at some of the goodies you'll find:
 
-### Available Now:
-- **EDA (Exploratory Data Analysis)**: Essential tools to help you understand and explore your data quickly and efficiently.
+### WIP:
+- [**EDA (Exploratory Data Analysis)**](EDA_demo.ipynb): Essential tools to help you understand and explore your data quickly and efficiently.
 
 ### Coming Soon:
 - **Data Transformations**: Functions to filter, select, and rename columns effortlessly.
