@@ -14,17 +14,13 @@ Welcome to `spark_utils`, a collection of utility functions for making PySpark d
 
 ## What's Inside?
 
-The `spark_utils` module is packed with useful functions for common PySpark tasks. Here's a sneak peek at some of the goodies you'll find:
+The `spark_utils` module is packed with useful functions for common PySpark tasks. Here's a sneak peek at some of the goodies you'll find:    
 
-### WIP:
 - [**Data Quality Checks**](data_quality_check_demo.ipynb): Handy tools to help you explore your data quickly with a focus on quality check.
+- [**Data Clean & Filter**](data_cleaning_demo.ipynb): Handy functions to clean messy date and number fields, and to filter with complex logic. 
 
 
-### Coming Soon:
-- **Data Transformations**: Functions to filter, select, and rename columns effortlessly.
-- **I/O Operations**: Simplified read/write operations to and from various data sources.
-- **Schema Management**: Handy utilities for defining and validating schemas.
-- **Error Handling**: Standardized error handling and logging practices to keep your pipelines robust.
+
 
 ## Installation
 
