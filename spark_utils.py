@@ -238,7 +238,7 @@ def value_counts_with_pct(df:DataFrame, column_name:str) -> DataFrame:
 def transform_date_cols(df: DataFrame, date_cols: List[str], str_date_format: str = "ddMMMyyyy") -> DataFrame:
     """
     Transforms specified columns in a DataFrame to date format.
-
+    
     Parameters:
         df (DataFrame): The input DataFrame.
         date_cols (List[str]): A list of column names to be transformed to dates.
@@ -259,6 +259,16 @@ def filter_by_date(df: DataFrame, date_col: str, min_date: str, max_date: str, o
     """
     Filter the DataFrame to include only rows where the specified date column is within the range [min_date, max_date].
 
+    PySpark uses Java's date format, NOT Python's strftime:
+        - dd → Day (2-digit, e.g., 02)
+        - MMM → Abbreviated month (e.g., JAN)
+        - yy → 2-digit year (e.g., 99 → 1999)
+        - yyyy → 4-digit year (e.g., 2022)
+        - HH → Hour (24-hour format, e.g., 23 for 11 PM)
+        - mm → Minutes (e.g., 02)
+        - ss → Seconds (e.g., 59)
+        - S --> Milliseconds (e.g., 999)
+        
     Parameters:
     - df (DataFrame): The DataFrame to filter.
     - date_col (str): The name of the date column to filter on.
@@ -325,28 +335,24 @@ def top_rows_for_ids(df: DataFrame, id_list: list, value_field: str, ascending: 
     return result_df
 
 def clean_dollar_cols(df: DataFrame, cols_to_clean: List[str]) -> DataFrame:
-        """
-        Clean specified columns of a Spark DataFrame by removing '$' symbols, commas, and converting to floating-point numbers.
+    """
+    Clean specified columns of a Spark DataFrame by removing '$' symbols, commas, and converting to floating-point numbers.
 
-        Parameters:
-            df (DataFrame): The DataFrame to clean.
-            cols_to_clean (List[str]): List of column names to clean.
+    Parameters:
+        df (DataFrame): The DataFrame to clean.
+        cols_to_clean (List[str]): List of column names to clean.
 
-        Returns:
-            DataFrame: DataFrame with specified columns cleaned of '$' symbols and commas, and converted to floating-point numbers.
-        """
-        for col_name in cols_to_clean:
-            # Remove '$' symbols and commas, handle NULLs
-            df_ = df.withColumn(
-                col_name, 
-                when(
-                    col(col_name).isNotNull(), 
-                    regexp_replace(
-                        regexp_replace(col(col_name), "\\$", ""),  # Remove $
-                        ",", "" # Remove ,
-                    ).cast("float")
-                ).otherwise(None)  # Keep NULLs unchanged
-            )
-            
-        return df_
+    Returns:
+        DataFrame: DataFrame with specified columns cleaned of '$' symbols and commas, and converted to floating-point numbers.
+    """
+    for col_name in cols_to_clean:
+        df = df.withColumn(
+            col_name, 
+            when(
+                col(col_name).isNotNull(), 
+                regexp_replace(col(col_name), "[$,]", "").cast("float")
+            ).otherwise(None)  # Keep NULLs unchanged
+        )
+    
+    return df
 
