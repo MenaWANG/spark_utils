@@ -115,7 +115,7 @@ def is_primary_key(df: DataFrame, cols: List[str], verbose: bool = True) -> bool
     missing_cols = [col_name for col_name in cols if col_name not in df.columns]
     if missing_cols:
         if verbose:
-            print(f"Column(s) {', '.join(missing_cols)} do not exist in the DataFrame.")
+            print(f"❌ Column(s) {', '.join(missing_cols)} do not exist in the DataFrame.")
         return False
 
     # Filter out rows with missing values and cache for multiple operations
@@ -124,12 +124,16 @@ def is_primary_key(df: DataFrame, cols: List[str], verbose: bool = True) -> bool
 
     try:
         # Check for missing values in each specified column
+        all_columns_complete = True
         for col_name in cols:
             missing_rows_count = df.where(F.col(col_name).isNull()).count()
-            if missing_rows_count > 0 and verbose:
-                print(
-                    f"There are {missing_rows_count:,} row(s) with missing values in column '{col_name}'."
-                )
+            if missing_rows_count > 0:
+                all_columns_complete = False
+                if verbose:
+                    print(f"⚠️ There are {missing_rows_count:,} row(s) with missing values in column '{col_name}'.")
+        
+        if verbose and all_columns_complete:
+            print(f"✅ No missing values found in columns: {', '.join(cols)}")
 
         # Get counts for comparison
         total_row_count = filtered_df.count()
@@ -142,20 +146,24 @@ def is_primary_key(df: DataFrame, cols: List[str], verbose: bool = True) -> bool
             unique_row_count = selected_cols.distinct().count()
 
             if verbose:
-                print(
-                    f"Total row count after filtering out missings: {total_row_count:,}"
-                )
-                print(
-                    f"Unique row count after filtering out missings: {unique_row_count:,}"
-                )
+                if not all_columns_complete:
+                    print(
+                        f"ℹ️ Total row count after filtering out missings: {total_row_count:,}"
+                    )
+                    print(
+                        f"ℹ️ Unique row count after filtering out missings: {unique_row_count:,}"
+                    )
+                else:
+                    print(f"ℹ️ Total row count: {total_row_count:,}")
+                    print(f"ℹ️ Unique row count: {unique_row_count:,}")
 
             is_primary = unique_row_count == total_row_count
 
             if verbose:
                 if is_primary:
-                    print(f"The column(s) {', '.join(cols)} form a primary key.")
+                    print(f"🔑 The column(s) {', '.join(cols)} form a primary key.")
                 else:
-                    print(f"The column(s) {', '.join(cols)} do not form a primary key.")
+                    print(f"❌ The column(s) {', '.join(cols)} do not form a primary key.")
 
             return is_primary
 
