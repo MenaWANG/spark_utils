@@ -4,7 +4,7 @@ from pyspark.sql import DataFrame, Window
 import pyspark.sql.functions as F
 from pyspark.sql.types import DoubleType
 from functools import reduce
-from typing import List, Union
+from typing import List, Union, Optional
 from pyspark.sql import SparkSession
 
 
@@ -279,6 +279,119 @@ def cols_responsible_for_id_dups(spark_df: DataFrame, id_list: List[str]) -> Dat
 
     return summary_table
 
+def deduplicate_by_rank(
+    df: DataFrame,
+    id_cols: Union[str, List[str]],
+    ranking_col: str,
+    ascending: bool = False,
+    tiebreaker_col: Optional[str] = None,
+    verbose: bool = False,
+) -> DataFrame:
+    """
+    Deduplicate rows by keeping the best-ranked row per group of id_cols,
+    optionally breaking ties by preferring non-missing tiebreaker_col.
+
+    Parameters
+    ----------
+    df : DataFrame
+        The PySpark DataFrame to deduplicate.
+    id_cols : Union[str, List[str]]
+        Column(s) defining the unique entity (e.g., customer_id, product_id).
+    ranking_col : str
+        The column to rank within each group (e.g., 'date', 'score', 'priority').
+    ascending : bool, default=False
+        Sort order for ranking_col:
+        - True: smallest value kept (e.g., earliest date)
+        - False: largest value kept (e.g., most recent date, highest score)
+    tiebreaker_col : Optional[str], default=None
+        Column where non-missing values are preferred in case of ties.
+        Useful when ranking_col has identical values.
+    verbose : bool, default=False
+        If True, print information about the deduplication process.
+
+    Returns
+    -------
+    DataFrame
+        Deduplicated PySpark DataFrame with one row per unique combination of id_cols.
+
+    Examples
+    --------
+    >>> from pyspark.sql import SparkSession
+    >>> spark = SparkSession.builder.appName("test").getOrCreate()
+    >>> df = spark.createDataFrame([
+    ...     ('C001', '2024-01-01', 100, 'old@email.com'),
+    ...     ('C001', '2024-01-15', 200, 'new@email.com'),
+    ...     ('C002', '2024-01-05', 150, None),
+    ...     ('C002', '2024-01-10', 150, 'email@test.com'),
+    ...     ('C003', '2024-01-20', 300, 'test@email.com')
+    ... ], ['customer_id', 'transaction_date', 'amount', 'email'])
+
+    >>> # Keep most recent transaction per customer
+    >>> result = deduplicate_by_rank(df, 'customer_id', 'transaction_date', ascending=False)
+    >>> result.show()
+
+    >>> # Keep highest amount, break ties by preferring non-null email
+    >>> result = deduplicate_by_rank(df, 'customer_id', 'amount', ascending=False, tiebreaker_col='email')
+    >>> result.show()
+    """
+    # Handle empty DataFrame
+    if df.count() == 0:
+        if verbose:
+            print("⚠️ Input DataFrame is empty. Returning empty DataFrame.")
+        return df
+
+    # Normalize id_cols to list
+    if isinstance(id_cols, str):
+        id_cols = [id_cols]
+
+    # Validate that all columns exist
+    df_columns = df.columns
+    missing_cols = [col for col in id_cols + [ranking_col] if col not in df_columns]
+    if tiebreaker_col and tiebreaker_col not in df_columns:
+        missing_cols.append(tiebreaker_col)
+
+    if missing_cols:
+        raise ValueError(f"Column(s) {missing_cols} not found in DataFrame")
+
+    if verbose:
+        initial_count = df.count()
+        unique_groups = df.select(*id_cols).distinct().count()
+        print(f"🔄 Deduplicating {initial_count} rows by {id_cols}")
+        print(f"ℹ️ Found {unique_groups} unique groups")
+
+    # Define window specification for ranking
+    window_spec = Window.partitionBy(*id_cols)
+    
+    # Build order by columns for the window
+    order_cols = []
+    
+    # Add ranking column with appropriate sort order
+    if ascending:
+        order_cols.append(F.col(ranking_col).asc())
+    else:
+        order_cols.append(F.col(ranking_col).desc())
+    
+    # Add tiebreaker logic if specified
+    if tiebreaker_col:
+        # Prefer non-null values (nulls last)
+        order_cols.append(F.col(tiebreaker_col).asc_nulls_last())
+    
+    # Apply ordering to window
+    window_spec = window_spec.orderBy(*order_cols)
+    
+    # Add row number based on ranking
+    df_with_rank = df.withColumn("_row_number", F.row_number().over(window_spec))
+    
+    # Keep only the first-ranked row per group
+    dedup_df = df_with_rank.filter(F.col("_row_number") == 1).drop("_row_number")
+
+    if verbose:
+        final_count = dedup_df.count()
+        removed_count = initial_count - final_count
+        print(f"✅ Removed {removed_count} duplicate rows")
+        print(f"📊 Final dataset: {final_count} rows")
+
+    return dedup_df
 
 def filter_df_by_strings(
     df: DataFrame, col_name: str, search_strings: List[str]
