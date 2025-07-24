@@ -4,7 +4,7 @@ from pyspark.sql import DataFrame, Window
 import pyspark.sql.functions as F
 from pyspark.sql.types import DoubleType
 from functools import reduce
-from typing import List
+from typing import List, Union
 from pyspark.sql import SparkSession
 
 
@@ -89,7 +89,7 @@ def print_schema_alphabetically(df: DataFrame):
     sorted_df.printSchema()
 
 
-def is_primary_key(df: DataFrame, cols: List[str], verbose: bool = True) -> bool:
+def is_primary_key(df: DataFrame, cols: Union[str, List[str]], verbose: bool = True) -> bool:
     """
     Check if the combination of specified columns forms
     a primary key in the DataFrame.
@@ -104,6 +104,9 @@ def is_primary_key(df: DataFrame, cols: List[str], verbose: bool = True) -> bool
     """
     # Get SparkSession
     spark = get_spark_session()
+    
+    # If cols is a single string, convert it to a list
+    cols = [cols] if isinstance(cols, str) else cols
 
     # Check if the DataFrame is not empty
     if df.isEmpty():
