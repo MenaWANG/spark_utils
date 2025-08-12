@@ -6,6 +6,94 @@ from pyspark.sql.types import DoubleType
 from functools import reduce
 from typing import List, Union, Optional
 from pyspark.sql import SparkSession
+import sys
+import os
+import getpass
+
+
+def setup_pydantic_v2(custom_path: str = None) -> Optional[str]:
+    """
+    Setup Pydantic v2 in DBR environment from a custom installation path.  
+    
+    This function assumes Pydantic v2 has already been installed to a custom path.
+    
+    Installation Instructions (run these FIRST):
+    --------------------------------------------------------------
+    import getpass
+    username = getpass.getuser()
+    custom_path = f"/tmp/custom_packages_{username}"
+    
+    %pip install --target {custom_path} pydantic==2.11.7
+    
+    Then call this function:
+    setup_pydantic_v2(custom_path)
+    
+    Parameters:
+    -----------
+    custom_path : str, optional
+        Path where Pydantic v2 is installed. If None, will try to determine
+        from username automatically.
+        
+    Returns:
+    --------
+    str or None
+        Pydantic version if successful, None if failed
+        
+    Examples:
+    ---------
+    >>> # Auto-detect path based on username
+    >>> setup_pydantic_v2()
+    
+    >>> # Explicit path
+    >>> setup_pydantic_v2("/tmp/custom_packages_myusername")
+    """
+    # Auto-generate custom_path if not provided
+    if custom_path is None:
+        username = getpass.getuser()
+        custom_path = f"/tmp/custom_packages_{username}"
+        print(f"🔍 Using auto-detected path: {custom_path}")
+    
+    # Check if custom path exists
+    if not os.path.exists(custom_path):
+        print(f"❌ Custom path not found: {custom_path}")
+        print(f"💡 Please install Pydantic first:")
+        print(f"   %pip install --target {custom_path} pydantic==2.11.7")
+        return None
+    
+    # Check if we already have the right version
+    try:
+        import pydantic
+        if pydantic.__version__.startswith('2.'):
+            print(f"✅ Pydantic {pydantic.__version__} already available")
+            return pydantic.__version__
+    except ImportError:
+        pass
+    
+    # Clear any cached pydantic modules to ensure clean import
+    pydantic_modules = [mod for mod in sys.modules.keys() if mod.startswith('pydantic')]
+    if pydantic_modules:
+        print(f"🧹 Clearing cached modules: {pydantic_modules}")
+        for mod in pydantic_modules:
+            del sys.modules[mod]
+    
+    # Add custom packages path to the beginning of sys.path
+    if custom_path not in sys.path:
+        sys.path.insert(0, custom_path)
+        print(f"📁 Added to Python path: {custom_path}")
+    
+    # Verify installation
+    try:
+        import pydantic
+        if pydantic.__version__.startswith('2.'):
+            print(f"🚀 Pydantic {pydantic.__version__} ready!")
+            return pydantic.__version__
+        else:
+            print(f"⚠️  Found Pydantic {pydantic.__version__}, but expected v2.x")
+            return None
+    except ImportError as e:
+        print(f"❌ Failed to import Pydantic from {custom_path}: {e}")
+        print(f"💡 Please ensure Pydantic v2 is installed at: {custom_path}")
+        return None
 
 
 def get_spark_session():
