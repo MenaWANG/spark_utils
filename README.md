@@ -17,7 +17,9 @@ Welcome to `spark_utils`, a collection of utility functions for making PySpark d
 The `spark_utils` module is packed with useful functions for common PySpark tasks. Here's a sneak peek at some of the goodies you'll find:    
 
 - [**Data Quality Checks**](data_quality_check_demo.ipynb): Handy tools to help you explore your data quickly with a focus on quality check.
-- [**Data Clean & Filter**](data_cleaning_demo.ipynb): Handy functions to clean messy date and number fields, and to filter with complex logic. 
+- [**Data Clean & Filter**](data_cleaning_demo.ipynb): Handy functions to clean messy date and number fields, and to filter with complex logic.
+- **Environment Setup**: Helper functions to set up your Spark environment:
+  - `setup_pydantic_v2`: Configure a particular package version in Databricks Runtime (DBR) environments with custom installation paths when necessary.
 
 
 
