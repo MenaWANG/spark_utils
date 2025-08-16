@@ -4,11 +4,21 @@ from pyspark.sql import DataFrame, Window
 import pyspark.sql.functions as F
 from pyspark.sql.types import DoubleType
 from functools import reduce
-from typing import List, Union, Optional
-from pyspark.sql import SparkSession
+from typing import List, Union, Optional, Dict, Any
 import sys
 import os
 import getpass
+
+def get_spark_session():
+    """
+    Get or create a Spark session using singleton pattern.
+    """
+    try:
+        return spark 
+    except NameError:
+        # Only create Spark sesssion if it is not already available
+        from pyspark.sql import SparkSession
+        return SparkSession.builder.getOrCreate()
 
 
 def setup_pydantic_v2(custom_path: str = None) -> Optional[str]:
@@ -94,13 +104,6 @@ def setup_pydantic_v2(custom_path: str = None) -> Optional[str]:
         print(f"❌ Failed to import Pydantic from {custom_path}: {e}")
         print(f"💡 Please ensure Pydantic v2 is installed at: {custom_path}")
         return None
-
-
-def get_spark_session():
-    """
-    Get or create a Spark session using singleton pattern.
-    """
-    return SparkSession.builder.getOrCreate()
 
 
 def round_numeric_cols(df, decimal_places=2):
@@ -699,3 +702,276 @@ def clean_dollar_cols(df: DataFrame, cols_to_clean: List[str]) -> DataFrame:
         )
 
     return df_
+
+def union_tables_by_prefix(
+    table_prefix: str,
+    output_table_name: str,
+    output_schema: Optional[str] = None,
+    source_schema: Optional[str] = None,
+    order_by_col: Optional[Union[str, List[str]]] = None,
+    drop_duplicates: bool = False
+) -> None:
+    """
+    Safely combine multiple tables with the same prefix into a single table.
+    Ensure the target table doesn't exist or is OK to overwrite before running.
+    Handles column ordering differences by standardizing column order before union.
+    
+    Args:
+        table_prefix: Prefix of the tables to combine (e.g., 'cleaned_transcript_oi_batch_')
+        output_table_name: Name of the final combined table
+        output_schema: Schema for the output table (optional)
+        source_schema: Schema where the batch tables are located (optional)
+        order_by_col: Column(s) to order the final table by
+        drop_duplicates: Whether to remove duplicate rows
+    """
+    spark = get_spark_session()
+   
+    # Get list of all tables with the specified prefix
+    if source_schema:
+        tables = spark.sql(f"SHOW TABLES IN {source_schema}").collect()
+        matching_tables = [
+            row.tableName for row in tables 
+            if row.tableName.startswith(table_prefix)
+        ]
+    else:
+        tables = spark.sql("SHOW TABLES").collect()
+        matching_tables = [
+            row.tableName for row in tables 
+            if row.tableName.startswith(table_prefix)
+        ]
+    
+    if not matching_tables:
+        raise ValueError(f"No tables found with prefix '{table_prefix}'")
+    
+    print(f"🔍 Found {len(matching_tables)} tables to combine:")
+    for table in sorted(matching_tables):
+        print(f"   - {table}")
+    
+    # Read first table to establish the standard column schema
+    first_table = sorted(matching_tables)[0]
+    full_first_table_name = f"{source_schema}.{first_table}" if source_schema else first_table
+    first_df = spark.table(full_first_table_name)
+    standard_columns = first_df.columns
+    
+    print(f"📋 Using column order from {first_table}:")
+    print(f"   Columns: {standard_columns}")
+    
+    # Verify all tables have the same columns (but potentially different order)
+    print(f"🔍 Verifying column consistency across all tables...")
+    for table_name in matching_tables:
+        full_table_name = f"{source_schema}.{table_name}" if source_schema else table_name
+        table_df = spark.table(full_table_name)
+        table_columns = set(table_df.columns)
+        standard_columns_set = set(standard_columns)
+        
+        if table_columns != standard_columns_set:
+            missing_cols = standard_columns_set - table_columns
+            extra_cols = table_columns - standard_columns_set
+            error_msg = f"Schema mismatch in table {table_name}:\n"
+            if missing_cols:
+                error_msg += f"  Missing columns: {missing_cols}\n"
+            if extra_cols:
+                error_msg += f"  Extra columns: {extra_cols}\n"
+            raise ValueError(error_msg)
+        
+        # Check if column order is different
+        if table_df.columns != standard_columns:
+            print(f"   ⚠️  {table_name} has different column order - will standardize")
+        else:
+            print(f"   ✅ {table_name} has matching column order")
+    
+    # Read and union all tables with standardized column order
+    combined_df = None
+    total_rows = 0
+    
+    for i, table_name in enumerate(sorted(matching_tables)):
+        full_table_name = f"{source_schema}.{table_name}" if source_schema else table_name
+        
+        print(f"📖 Reading table {i+1}/{len(matching_tables)}: {full_table_name}")
+        
+        table_df = spark.table(full_table_name)
+        
+        # Standardize column order by selecting columns in the standard order
+        # This ensures union operations are safe regardless of original column order
+        standardized_df = table_df.select(*standard_columns)
+        
+        table_row_count = standardized_df.count()
+        total_rows += table_row_count
+        
+        print(f"   Rows: {table_row_count:,}")
+        
+        if combined_df is None:
+            combined_df = standardized_df
+        else:
+            # Now safe to union since all DataFrames have identical column order
+            combined_df = combined_df.union(standardized_df)
+    
+    print(f"\n📊 Total rows before processing: {total_rows:,}")
+    
+    # Drop duplicates if requested
+    if drop_duplicates:
+        print("🔄 Removing duplicates...")
+        before_count = combined_df.count()
+        combined_df = combined_df.dropDuplicates()
+        after_count = combined_df.count()
+        print(f"   Rows after deduplication: {after_count:,} (removed {before_count - after_count:,})")
+    
+    # Order the final table if specified
+    if order_by_col:
+        print(f"🔄 Ordering by: {order_by_col}")
+        if isinstance(order_by_col, str):
+            combined_df = combined_df.orderBy(F.col(order_by_col))
+        else:
+            combined_df = combined_df.orderBy(*[F.col(c) for c in order_by_col])
+    
+    # Write the combined table
+    output_full_name = f"{output_schema}.{output_table_name}" if output_schema else output_table_name
+    
+    print(f"💾 Writing combined table: {output_full_name}")
+    combined_df.write.mode("overwrite").saveAsTable(output_full_name)
+    
+    # Verify the final table
+    final_count = spark.table(output_full_name).count()
+    print(f"✅ Successfully created {output_full_name} with {final_count:,} rows")
+    print(f"📋 Final table column order: {spark.table(output_full_name).columns}")
+
+def cleanup_tables_by_prefix(
+    schema_name: str,
+    table_prefix: str,
+    catalog_name: Optional[str] = None,
+    dry_run: bool = True,
+    confirm_deletion: bool = True
+) -> Dict[str, Any]:
+    """
+    Clean up all tables that start with a specific prefix in a Unity Catalog schema.
+    
+    Parameters:
+    -----------
+    schema_name : str
+        Schema name in Unity Catalog
+    table_prefix : str
+        Prefix to match table names (e.g., "batch_", "temp_", "processed_")
+    catalog_name : str, optional
+        Catalog name. If None, uses current catalog
+    dry_run : bool, default=True
+        If True, only shows what would be deleted without actually deleting
+    confirm_deletion : bool, default=True
+        If True, asks for confirmation before deleting (only when dry_run=False)
+        
+    Returns:
+    --------
+    Dict[str, Any]
+        Summary of cleanup operation
+        
+    Examples:
+    ---------
+    >>> # Dry run to see what would be deleted
+    >>> cleanup_tables_by_prefix("my_schema", "batch_", dry_run=True)
+    
+    >>> # Actually delete tables with confirmation
+    >>> cleanup_tables_by_prefix("my_schema", "batch_", dry_run=False)
+    
+    >>> # Delete without confirmation (use with caution)
+    >>> cleanup_tables_by_prefix("my_schema", "temp_", dry_run=False, confirm_deletion=False)
+    """    
+    spark = get_spark_session()
+   
+    # Construct schema reference
+    if catalog_name:
+        schema_ref = f"{catalog_name}.{schema_name}"
+    else:
+        schema_ref = schema_name
+    
+    print(f"🔍 Searching for tables with prefix '{table_prefix}' in schema: {schema_ref}")
+    
+    try:
+        # Get all tables in the schema
+        tables_df = spark.sql(f"SHOW TABLES IN {schema_ref}")
+        all_tables = [row['tableName'] for row in tables_df.collect()]
+        
+        # Filter tables by prefix
+        matching_tables = [table for table in all_tables if table.startswith(table_prefix)]
+        
+        print(f"📊 Found {len(matching_tables)} tables matching prefix '{table_prefix}':")
+        for table in matching_tables:
+            print(f"   - {table}")
+        
+        if not matching_tables:
+            print("✅ No tables found to clean up.")
+            return {
+                'total_tables_found': 0,
+                'tables_deleted': 0,
+                'tables_failed': 0,
+                'dry_run': dry_run
+            }
+        
+        # Dry run - just show what would be deleted
+        if dry_run:
+            print(f"\n🔍 DRY RUN MODE - No tables will be deleted")
+            print(f"   To actually delete these tables, set dry_run=False")
+            return {
+                'total_tables_found': len(matching_tables),
+                'tables_to_delete': matching_tables,
+                'tables_deleted': 0,
+                'tables_failed': 0,
+                'dry_run': True
+            }
+        
+        # Confirmation prompt
+        if confirm_deletion:
+            print(f"\n⚠️  WARNING: About to delete {len(matching_tables)} tables!")
+            response = input("Type 'DELETE' to confirm deletion: ")
+            if response != 'DELETE':
+                print("❌ Deletion cancelled.")
+                return {
+                    'total_tables_found': len(matching_tables),
+                    'tables_deleted': 0,
+                    'tables_failed': 0,
+                    'dry_run': False,
+                    'cancelled': True
+                }
+        
+        # Actually delete tables
+        print(f"\n🗑️  Deleting {len(matching_tables)} tables...")
+        deleted_tables = []
+        failed_tables = []
+        
+        for table in matching_tables:
+            try:
+                full_table_name = f"{schema_ref}.{table}"
+                spark.sql(f"DROP TABLE IF EXISTS {full_table_name}")
+                deleted_tables.append(table)
+                print(f"   ✅ Deleted: {table}")
+                
+            except Exception as e:
+                failed_tables.append({'table': table, 'error': str(e)})
+                print(f"   ❌ Failed to delete {table}: {str(e)}")
+        
+        
+        # Summary
+        print(f"\n📊 CLEANUP SUMMARY:")
+        print(f"   Schema: {schema_ref}")
+        print(f"   Prefix: {table_prefix}")
+        print(f"   Tables found: {len(matching_tables)}")
+        print(f"   Successfully deleted: {len(deleted_tables)}")
+        print(f"   Failed deletions: {len(failed_tables)}")
+        
+        if failed_tables:
+            print(f"\n❌ Failed deletions:")
+            for failure in failed_tables:
+                print(f"   - {failure['table']}: {failure['error']}")
+        
+        return {
+            'total_tables_found': len(matching_tables),
+            'tables_deleted': len(deleted_tables),
+            'tables_failed': len(failed_tables),
+            'deleted_tables': deleted_tables,
+            'failed_tables': failed_tables,
+            'dry_run': False
+        }
+        
+    except Exception as e:
+        error_msg = f"Error during cleanup operation: {str(e)}"
+        print(f"❌ {error_msg}")
+        raise RuntimeError(error_msg) from e
+
