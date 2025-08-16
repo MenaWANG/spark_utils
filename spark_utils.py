@@ -4,7 +4,7 @@ from pyspark.sql import DataFrame, Window
 import pyspark.sql.functions as F
 from pyspark.sql.types import DoubleType
 from functools import reduce
-from typing import List, Union, Optional
+from typing import List, Union, Optional, Dict, Any
 import sys
 import os
 import getpass
@@ -834,3 +834,144 @@ def union_tables_by_prefix(
     final_count = spark.table(output_full_name).count()
     print(f"✅ Successfully created {output_full_name} with {final_count:,} rows")
     print(f"📋 Final table column order: {spark.table(output_full_name).columns}")
+
+def cleanup_tables_by_prefix(
+    schema_name: str,
+    table_prefix: str,
+    catalog_name: Optional[str] = None,
+    dry_run: bool = True,
+    confirm_deletion: bool = True
+) -> Dict[str, Any]:
+    """
+    Clean up all tables that start with a specific prefix in a Unity Catalog schema.
+    
+    Parameters:
+    -----------
+    schema_name : str
+        Schema name in Unity Catalog
+    table_prefix : str
+        Prefix to match table names (e.g., "batch_", "temp_", "processed_")
+    catalog_name : str, optional
+        Catalog name. If None, uses current catalog
+    dry_run : bool, default=True
+        If True, only shows what would be deleted without actually deleting
+    confirm_deletion : bool, default=True
+        If True, asks for confirmation before deleting (only when dry_run=False)
+        
+    Returns:
+    --------
+    Dict[str, Any]
+        Summary of cleanup operation
+        
+    Examples:
+    ---------
+    >>> # Dry run to see what would be deleted
+    >>> cleanup_tables_by_prefix("my_schema", "batch_", dry_run=True)
+    
+    >>> # Actually delete tables with confirmation
+    >>> cleanup_tables_by_prefix("my_schema", "batch_", dry_run=False)
+    
+    >>> # Delete without confirmation (use with caution)
+    >>> cleanup_tables_by_prefix("my_schema", "temp_", dry_run=False, confirm_deletion=False)
+    """    
+    spark = get_spark_session()
+   
+    # Construct schema reference
+    if catalog_name:
+        schema_ref = f"{catalog_name}.{schema_name}"
+    else:
+        schema_ref = schema_name
+    
+    print(f"🔍 Searching for tables with prefix '{table_prefix}' in schema: {schema_ref}")
+    
+    try:
+        # Get all tables in the schema
+        tables_df = spark.sql(f"SHOW TABLES IN {schema_ref}")
+        all_tables = [row['tableName'] for row in tables_df.collect()]
+        
+        # Filter tables by prefix
+        matching_tables = [table for table in all_tables if table.startswith(table_prefix)]
+        
+        print(f"📊 Found {len(matching_tables)} tables matching prefix '{table_prefix}':")
+        for table in matching_tables:
+            print(f"   - {table}")
+        
+        if not matching_tables:
+            print("✅ No tables found to clean up.")
+            return {
+                'total_tables_found': 0,
+                'tables_deleted': 0,
+                'tables_failed': 0,
+                'dry_run': dry_run
+            }
+        
+        # Dry run - just show what would be deleted
+        if dry_run:
+            print(f"\n🔍 DRY RUN MODE - No tables will be deleted")
+            print(f"   To actually delete these tables, set dry_run=False")
+            return {
+                'total_tables_found': len(matching_tables),
+                'tables_to_delete': matching_tables,
+                'tables_deleted': 0,
+                'tables_failed': 0,
+                'dry_run': True
+            }
+        
+        # Confirmation prompt
+        if confirm_deletion:
+            print(f"\n⚠️  WARNING: About to delete {len(matching_tables)} tables!")
+            response = input("Type 'DELETE' to confirm deletion: ")
+            if response != 'DELETE':
+                print("❌ Deletion cancelled.")
+                return {
+                    'total_tables_found': len(matching_tables),
+                    'tables_deleted': 0,
+                    'tables_failed': 0,
+                    'dry_run': False,
+                    'cancelled': True
+                }
+        
+        # Actually delete tables
+        print(f"\n🗑️  Deleting {len(matching_tables)} tables...")
+        deleted_tables = []
+        failed_tables = []
+        
+        for table in matching_tables:
+            try:
+                full_table_name = f"{schema_ref}.{table}"
+                spark.sql(f"DROP TABLE IF EXISTS {full_table_name}")
+                deleted_tables.append(table)
+                print(f"   ✅ Deleted: {table}")
+                
+            except Exception as e:
+                failed_tables.append({'table': table, 'error': str(e)})
+                print(f"   ❌ Failed to delete {table}: {str(e)}")
+        
+        
+        # Summary
+        print(f"\n📊 CLEANUP SUMMARY:")
+        print(f"   Schema: {schema_ref}")
+        print(f"   Prefix: {table_prefix}")
+        print(f"   Tables found: {len(matching_tables)}")
+        print(f"   Successfully deleted: {len(deleted_tables)}")
+        print(f"   Failed deletions: {len(failed_tables)}")
+        
+        if failed_tables:
+            print(f"\n❌ Failed deletions:")
+            for failure in failed_tables:
+                print(f"   - {failure['table']}: {failure['error']}")
+        
+        return {
+            'total_tables_found': len(matching_tables),
+            'tables_deleted': len(deleted_tables),
+            'tables_failed': len(failed_tables),
+            'deleted_tables': deleted_tables,
+            'failed_tables': failed_tables,
+            'dry_run': False
+        }
+        
+    except Exception as e:
+        error_msg = f"Error during cleanup operation: {str(e)}"
+        print(f"❌ {error_msg}")
+        raise RuntimeError(error_msg) from e
+
