@@ -5,10 +5,20 @@ import pyspark.sql.functions as F
 from pyspark.sql.types import DoubleType
 from functools import reduce
 from typing import List, Union, Optional
-from pyspark.sql import SparkSession
 import sys
 import os
 import getpass
+
+def get_spark_session():
+    """
+    Get or create a Spark session using singleton pattern.
+    """
+    try:
+        return spark 
+    except NameError:
+        # Only create Spark sesssion if it is not already available
+        from pyspark.sql import SparkSession
+        return SparkSession.builder.getOrCreate()
 
 
 def setup_pydantic_v2(custom_path: str = None) -> Optional[str]:
@@ -94,13 +104,6 @@ def setup_pydantic_v2(custom_path: str = None) -> Optional[str]:
         print(f"❌ Failed to import Pydantic from {custom_path}: {e}")
         print(f"💡 Please ensure Pydantic v2 is installed at: {custom_path}")
         return None
-
-
-def get_spark_session():
-    """
-    Get or create a Spark session using singleton pattern.
-    """
-    return SparkSession.builder.getOrCreate()
 
 
 def round_numeric_cols(df, decimal_places=2):
@@ -721,6 +724,7 @@ def union_tables_by_prefix(
         order_by_col: Column(s) to order the final table by
         drop_duplicates: Whether to remove duplicate rows
     """
+    spark = get_spark_session()
    
     # Get list of all tables with the specified prefix
     if source_schema:
