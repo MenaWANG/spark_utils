@@ -699,3 +699,134 @@ def clean_dollar_cols(df: DataFrame, cols_to_clean: List[str]) -> DataFrame:
         )
 
     return df_
+
+def union_tables_by_prefix(
+    table_prefix: str,
+    output_table_name: str,
+    output_schema: Optional[str] = None,
+    source_schema: Optional[str] = None,
+    order_by_col: Optional[Union[str, List[str]]] = None,
+    drop_duplicates: bool = False
+) -> None:
+    """
+    Safely combine multiple tables with the same prefix into a single table.
+    Ensure the target table doesn't exist or is OK to overwrite before running.
+    Handles column ordering differences by standardizing column order before union.
+    
+    Args:
+        table_prefix: Prefix of the tables to combine (e.g., 'cleaned_transcript_oi_batch_')
+        output_table_name: Name of the final combined table
+        output_schema: Schema for the output table (optional)
+        source_schema: Schema where the batch tables are located (optional)
+        order_by_col: Column(s) to order the final table by
+        drop_duplicates: Whether to remove duplicate rows
+    """
+   
+    # Get list of all tables with the specified prefix
+    if source_schema:
+        tables = spark.sql(f"SHOW TABLES IN {source_schema}").collect()
+        matching_tables = [
+            row.tableName for row in tables 
+            if row.tableName.startswith(table_prefix)
+        ]
+    else:
+        tables = spark.sql("SHOW TABLES").collect()
+        matching_tables = [
+            row.tableName for row in tables 
+            if row.tableName.startswith(table_prefix)
+        ]
+    
+    if not matching_tables:
+        raise ValueError(f"No tables found with prefix '{table_prefix}'")
+    
+    print(f"🔍 Found {len(matching_tables)} tables to combine:")
+    for table in sorted(matching_tables):
+        print(f"   - {table}")
+    
+    # Read first table to establish the standard column schema
+    first_table = sorted(matching_tables)[0]
+    full_first_table_name = f"{source_schema}.{first_table}" if source_schema else first_table
+    first_df = spark.table(full_first_table_name)
+    standard_columns = first_df.columns
+    
+    print(f"📋 Using column order from {first_table}:")
+    print(f"   Columns: {standard_columns}")
+    
+    # Verify all tables have the same columns (but potentially different order)
+    print(f"🔍 Verifying column consistency across all tables...")
+    for table_name in matching_tables:
+        full_table_name = f"{source_schema}.{table_name}" if source_schema else table_name
+        table_df = spark.table(full_table_name)
+        table_columns = set(table_df.columns)
+        standard_columns_set = set(standard_columns)
+        
+        if table_columns != standard_columns_set:
+            missing_cols = standard_columns_set - table_columns
+            extra_cols = table_columns - standard_columns_set
+            error_msg = f"Schema mismatch in table {table_name}:\n"
+            if missing_cols:
+                error_msg += f"  Missing columns: {missing_cols}\n"
+            if extra_cols:
+                error_msg += f"  Extra columns: {extra_cols}\n"
+            raise ValueError(error_msg)
+        
+        # Check if column order is different
+        if table_df.columns != standard_columns:
+            print(f"   ⚠️  {table_name} has different column order - will standardize")
+        else:
+            print(f"   ✅ {table_name} has matching column order")
+    
+    # Read and union all tables with standardized column order
+    combined_df = None
+    total_rows = 0
+    
+    for i, table_name in enumerate(sorted(matching_tables)):
+        full_table_name = f"{source_schema}.{table_name}" if source_schema else table_name
+        
+        print(f"📖 Reading table {i+1}/{len(matching_tables)}: {full_table_name}")
+        
+        table_df = spark.table(full_table_name)
+        
+        # Standardize column order by selecting columns in the standard order
+        # This ensures union operations are safe regardless of original column order
+        standardized_df = table_df.select(*standard_columns)
+        
+        table_row_count = standardized_df.count()
+        total_rows += table_row_count
+        
+        print(f"   Rows: {table_row_count:,}")
+        
+        if combined_df is None:
+            combined_df = standardized_df
+        else:
+            # Now safe to union since all DataFrames have identical column order
+            combined_df = combined_df.union(standardized_df)
+    
+    print(f"\n📊 Total rows before processing: {total_rows:,}")
+    
+    # Drop duplicates if requested
+    if drop_duplicates:
+        print("🔄 Removing duplicates...")
+        before_count = combined_df.count()
+        combined_df = combined_df.dropDuplicates()
+        after_count = combined_df.count()
+        print(f"   Rows after deduplication: {after_count:,} (removed {before_count - after_count:,})")
+    
+    # Order the final table if specified
+    if order_by_col:
+        print(f"🔄 Ordering by: {order_by_col}")
+        if isinstance(order_by_col, str):
+            combined_df = combined_df.orderBy(F.col(order_by_col))
+        else:
+            combined_df = combined_df.orderBy(*[F.col(c) for c in order_by_col])
+    
+    # Write the combined table
+    output_full_name = f"{output_schema}.{output_table_name}" if output_schema else output_table_name
+    
+    print(f"💾 Writing combined table: {output_full_name}")
+    combined_df.write.mode("overwrite").saveAsTable(output_full_name)
+    
+    # Verify the final table
+    final_count = spark.table(output_full_name).count()
+    print(f"✅ Successfully created {output_full_name} with {final_count:,} rows")
+    print(f"📋 Final table column order: {spark.table(output_full_name).columns}")
