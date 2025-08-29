@@ -890,8 +890,9 @@ def union_with_historical_data(
     if sequence_col in table_new.columns or sequence_col in table_historical.columns:
         raise ValueError(f"Sequence column name '{sequence_col}' already exists in one of the tables")
     
-    # Get all columns from both tables (union of columns)
-    all_columns = list(set(table_new.columns + table_historical.columns))
+    # Get all columns from both tables in a deterministic order
+    # Use dict.fromkeys() to maintain order of first appearance while removing duplicates
+    all_columns = list(dict.fromkeys(table_new.columns + table_historical.columns))
     
     # Get table_new with only the join_keys and date for comparison
     table_new_dates = table_new.select(*join_keys, date_col).alias("tn")
