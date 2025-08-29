@@ -836,134 +836,116 @@ def union_tables_by_prefix(
     print(f"📋 Final table column order: {spark.table(output_full_name).columns}")
 
 def union_with_historical_data(
-    table_1: DataFrame, 
-    table_2: DataFrame, 
+    table_new: DataFrame, 
+    table_historical: DataFrame, 
     join_keys: List[str] = ["id1", "id2"],
     date_col: str = "date",
-    sequence_col: str = "record_sequence"
+    sequence_col: str = "record_sequence",
+    only_with_history: bool = False
 ) -> DataFrame:
     """
-    Union table_1 with historical data from table_2 and add a sequence column to track 
-    chronological order. Table_1 records get sequence=1, and historical records get 
+    Union table_new with historical data from table_historical and add a sequence column to track 
+    chronological order. Table_new records get sequence=1, and historical records get 
     sequence values 2, 3, etc. based on chronological order (most recent historical = 2).
     
     Smart Filtering Logic:
-    1. Only historical records from table_2 that have matching join_keys in table_1 are included
-    2. Only historical records where date_col < corresponding table_1 date are included
+    1. Only historical records from table_historical that have matching join_keys in table_new are included
+    2. Only historical records where date_col < corresponding table_new date are included
     3. This ensures we get truly historical data that's both relevant and chronologically valid
     
-    Intelligent Sequence Handling:
-    - The function automatically handles column schema differences between tables
+    Safe Schema Handling:
     - Missing columns are filled with null values to enable clean union operations
     - Column ordering is standardized before union to prevent schema mismatch errors
-    
-    This approach provides a complete timeline view where you can see the progression
-    of records over time for each combination of join_keys. The result is automatically
-    ordered by join_keys and then sequence_col for intuitive timeline viewing.
-    
+        
     Parameters:
-        table_1 (DataFrame): The primary DataFrame (current/latest records)
-        table_2 (DataFrame): The DataFrame containing historical data
+        table_new (DataFrame): The primary DataFrame (current/latest records)
+        table_historical (DataFrame): The DataFrame containing historical data
         join_keys (List[str]): List of column names to group by. Default is ["id1", "id2"]
         date_col (str): The date column name to order by. Default is "date"
         sequence_col (str): Name for the sequence column. Default is "record_sequence"
+        only_with_history (bool): If True, only keep records from table_new that have 
+                                 matching historical records. If False, keep all records 
+                                 from table_new. Default is False.
     
     Returns:
         DataFrame: Combined DataFrame with sequence column showing chronological order,
-                  containing only records where join_keys exist in table_1,
-                  ordered by join_keys then sequence_col for easy timeline viewing
-        
-    Examples:
-        # Create timeline with sequence numbers for relevant historical data only
-        result = union_with_historical_data(
-            table_1=current_data,
-            table_2=historical_data,
-            join_keys=["covno", "suffix"],
-            date_col="servDate",
-            sequence_col="timeline_order"
-        )
-        # Only historical records with matching covno+suffix in current_data are included
-        
-        # Filter to get only current records (sequence = 1)
-        current_only = result.filter(F.col("timeline_order") == 1)
-        
-        # Filter to get historical progression for a specific key
-        history = result.filter(
-            (F.col("covno") == "CV001") & 
-            (F.col("suffix") == "A")
-        )  # Already ordered by sequence, no need for additional orderBy
+                  containing records based on only_with_history parameter,
+                  ordered by join_keys then sequence_col for easy timeline viewing        
+
     """
     # Validate inputs
     if not isinstance(join_keys, list):
         raise ValueError("join_keys must be a list of column names")
     
     # Check if required columns exist
-    missing_cols_t1 = [col for col in join_keys + [date_col] if col not in table_1.columns]
-    missing_cols_t2 = [col for col in join_keys + [date_col] if col not in table_2.columns]
+    missing_cols_new = [col for col in join_keys + [date_col] if col not in table_new.columns]
+    missing_cols_hist = [col for col in join_keys + [date_col] if col not in table_historical.columns]
     
-    if missing_cols_t1:
-        raise ValueError(f"Missing columns in table_1: {missing_cols_t1}")
-    if missing_cols_t2:
-        raise ValueError(f"Missing columns in table_2: {missing_cols_t2}")
+    if missing_cols_new:
+        raise ValueError(f"Missing columns in table_new: {missing_cols_new}")
+    if missing_cols_hist:
+        raise ValueError(f"Missing columns in table_historical: {missing_cols_hist}")
     
     # Check if sequence column name conflicts with existing columns
-    if sequence_col in table_1.columns or sequence_col in table_2.columns:
+    if sequence_col in table_new.columns or sequence_col in table_historical.columns:
         raise ValueError(f"Sequence column name '{sequence_col}' already exists in one of the tables")
     
     # Get all columns from both tables (union of columns)
-    all_columns = list(set(table_1.columns + table_2.columns))
+    all_columns = list(set(table_new.columns + table_historical.columns))
     
-    # Filter table_2 to only include records that have matching join_keys in table_1
-    # AND where the date is strictly older than the corresponding date in table_1
-    # This ensures we only get truly historical records relevant to current records
+    # Get table_new with only the join_keys and date for comparison
+    table_new_dates = table_new.select(*join_keys, date_col).alias("tn")
     
-    # First, get table_1 with only the join_keys and date for comparison
-    table_1_dates = table_1.select(*join_keys, date_col).alias("t1")
+    # Join table_historical with table_new_dates to get matching keys and compare dates
+    table_historical_aliased = table_historical.alias("th")
     
-    # Join table_2 with table_1_dates to get matching keys and compare dates
-    # Use aliases to avoid ambiguous column references
-    table_2_aliased = table_2.alias("t2")
-    
-    # Join on the key columns and filter where table_2 date < table_1 date
-    table_2_filtered = table_2_aliased.join(
-        table_1_dates, 
+    # Join on the key columns and filter where table_historical date < table_new date
+    table_historical_filtered = table_historical_aliased.join(
+        table_new_dates, 
         join_keys, 
         "inner"
     ).filter(
-        F.col(f"t2.{date_col}") < F.col(f"t1.{date_col}")
-    ).select("t2.*")
+        F.col(f"th.{date_col}") < F.col(f"tn.{date_col}")
+    ).select("th.*")
+    
+    # Apply filtering logic based on only_with_history parameter
+    if only_with_history:
+        # Only keep records from table_new that have matching historical records
+        keys_with_history = table_historical_filtered.select(*join_keys).distinct()
+        table_new_filtered = table_new.join(keys_with_history, join_keys, "inner")
+    else:
+        # Keep all records from table_new (default behavior)
+        table_new_filtered = table_new
     
     # Add missing columns to each table with null values
-    table_1_normalized = table_1
-    table_2_normalized = table_2_filtered
+    table_new_normalized = table_new_filtered
+    table_historical_normalized = table_historical_filtered
     
     for col in all_columns:
-        if col not in table_1.columns:
-            table_1_normalized = table_1_normalized.withColumn(col, F.lit(None))
-        if col not in table_2_filtered.columns:
-            table_2_normalized = table_2_normalized.withColumn(col, F.lit(None))
+        if col not in table_new_filtered.columns:
+            table_new_normalized = table_new_normalized.withColumn(col, F.lit(None))
+        if col not in table_historical_filtered.columns:
+            table_historical_normalized = table_historical_normalized.withColumn(col, F.lit(None))
     
     # Ensure both tables have the same column order
-    table_1_normalized = table_1_normalized.select(*all_columns)
-    table_2_normalized = table_2_normalized.select(*all_columns)
+    table_new_normalized = table_new_normalized.select(*all_columns)
+    table_historical_normalized = table_historical_normalized.select(*all_columns)
     
     # Add source identifier to track origin
-    table_1_with_source = table_1_normalized.withColumn("_source", F.lit("current"))
-    table_2_with_source = table_2_normalized.withColumn("_source", F.lit("historical"))
+    table_new_with_source = table_new_normalized.withColumn("_source", F.lit("current"))
+    table_historical_with_source = table_historical_normalized.withColumn("_source", F.lit("historical"))
     
     # Union the tables
-    combined_df = table_1_with_source.union(table_2_with_source)
+    combined_df = table_new_with_source.union(table_historical_with_source)
     
     # Create window specification for ranking by date within each group
-    # Order by date descending so most recent gets rank 1
     window_spec = Window.partitionBy(*join_keys).orderBy(F.desc(date_col))
     
     # Add sequence number using row_number
-    # Most recent record gets sequence 1, next most recent gets 2, etc.
     result = combined_df.withColumn(
         sequence_col, 
         F.row_number().over(window_spec)
-    ).drop("_source")  # Remove the temporary source column
+    ).drop("_source")
     
     # Order the result by join_keys and then sequence for intuitive timeline view
     result = result.orderBy(*join_keys, sequence_col)
