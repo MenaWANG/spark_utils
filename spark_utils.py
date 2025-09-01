@@ -167,7 +167,7 @@ def shape(df: DataFrame, print_only: bool = True):
 
 def print_schema_alphabetically(df: DataFrame):
     """
-    Prints the schema of the DataFrame with columns sorted alphabetically.
+    Prints the schema of the DataFrame with columns sorted alphabetically (case-insensitive).
 
     Parameters:
     - df (DataFrame): The DataFrame whose schema is to be printed.
@@ -175,7 +175,7 @@ def print_schema_alphabetically(df: DataFrame):
     Returns:
     None
     """
-    sorted_columns = sorted(df.columns)
+    sorted_columns = sorted(df.columns, key=str.lower)
     sorted_df = df.select(sorted_columns)
     sorted_df.printSchema()
 
