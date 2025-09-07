@@ -66,7 +66,7 @@ def setup_pydantic_v2(custom_path: str = None) -> Optional[str]:
     # Check if custom path exists
     if not os.path.exists(custom_path):
         print(f"❌ Custom path not found: {custom_path}")
-        print(f"💡 Please install Pydantic first:")
+        print("💡 Please install Pydantic first:")
         print(f"   %pip install --target {custom_path} pydantic==2.11.7")
         return None
     
@@ -757,7 +757,7 @@ def union_tables_by_prefix(
     print(f"   Columns: {standard_columns}")
     
     # Verify all tables have the same columns (but potentially different order)
-    print(f"🔍 Verifying column consistency across all tables...")
+    print("🔍 Verifying column consistency across all tables...")
     for table_name in matching_tables:
         full_table_name = f"{source_schema}.{table_name}" if source_schema else table_name
         table_df = spark.table(full_table_name)
@@ -954,6 +954,213 @@ def union_with_historical_data(
     return result
 
 
+def count_delimited_items(col_name: str, delimiter: str = ",", distinct: bool = False):
+    """
+    Count number of items in delimited string column.
+    
+    Parameters:
+        col_name (str): Name of the column containing delimited string
+        delimiter (str, optional): Delimiter to split on. Default is ",".
+        distinct (bool, optional): If True, count only unique items. Default is False.
+    
+    Returns:
+        pyspark.sql.Column: New column with count of delimited items
+    
+    Examples:
+        >>> # Sample data with comma-delimited codes
+        >>> data = [
+        ...     ("user1", "A001,B002,C003"),        # 3 items
+        ...     ("user2", "X001"),                  # 1 item
+        ...     ("user3", ""),                      # 1 item (empty string becomes [""])
+        ...     ("user4", "A001,B002,A001,C003"),   # 4 items (3 distinct)
+        ... ]
+        >>> df = spark.createDataFrame(data, ["user", "codes"])
+        
+        >>> # Using default comma delimiter (total count)
+        >>> df.select("*", count_delimited_items("codes")).show()
+        >>> # +-----+-------------------+------------+
+        >>> # | user|              codes| codes_count|
+        >>> # +-----+-------------------+------------+
+        >>> # |user1|   A001,B002,C003|          3|
+        >>> # |user2|               X001|          1|
+        >>> # |user3|                   |          1|
+        >>> # |user4| A001,B002,A001,C003|          4|
+        >>> # +-----+-------------------+------------+
+        
+        >>> # Using distinct count
+        >>> df.select("*", count_delimited_items("codes", distinct=True)).show()
+        >>> # +-----+-------------------+------------+
+        >>> # | user|              codes| codes_count|
+        >>> # +-----+-------------------+------------+
+        >>> # |user1|   A001,B002,C003|          3|
+        >>> # |user2|               X001|          1|
+        >>> # |user3|                   |          1|
+        >>> # |user4| A001,B002,A001,C003|          3|  # Duplicates removed
+        >>> # +-----+-------------------+------------+
+        
+        >>> # Using semicolon delimiter with distinct count
+        >>> data_semicolon = [("user1", "A001;B002;A001;C003")]
+        >>> df_semi = spark.createDataFrame(data_semicolon, ["user", "codes"])
+        >>> df_semi.select("*", count_delimited_items("codes", ";", distinct=True)).show()
+        >>> # +-----+-------------------+------------+
+        >>> # | user|              codes| codes_count|
+        >>> # +-----+-------------------+------------+
+        >>> # |user1| A001;B002;A001;C003|          3|  # A001 appears twice, counted once
+        >>> # +-----+-------------------+------------+
+    """
+    if distinct:
+        # Split, convert to set to remove duplicates, then count
+        return F.size(F.array_distinct(F.split(F.col(col_name), delimiter))).alias(f"{col_name}_count")
+    else:
+        # Original behavior - count all items including duplicates
+        return F.size(F.split(F.col(col_name), delimiter)).alias(f"{col_name}_count")
+
+
+def add_delimited_codes_descriptions(
+    df: DataFrame, 
+    col_name: str, 
+    dim_df: DataFrame, 
+    code_col: str, 
+    desc_col: str, 
+    delimiter: str = ",",
+    distinct: bool = False,
+    output_col_name: Optional[str] = None
+) -> DataFrame:
+    """
+    Add a column with descriptions for delimited codes using a dimension table.
+    
+    Parameters:
+        df (DataFrame): The main DataFrame containing delimited codes
+        col_name (str): Name of the column containing delimited codes
+        dim_df (DataFrame): Dimension table containing code-to-description mappings
+        code_col (str): Column name in dim_df containing the codes
+        desc_col (str): Column name in dim_df containing the descriptions
+        delimiter (str, optional): Delimiter used in the codes column. Default is ",".
+        distinct (bool, optional): If True, remove duplicate descriptions. Default is False.
+        output_col_name (str, optional): Name for the new descriptions column. 
+                                       If None, uses "{col_name}_desc".
+    
+    Returns:
+        DataFrame: Original DataFrame with added descriptions column
+    
+    Examples:
+        >>> # Sample main data with delimited codes
+        >>> main_data = [
+        ...     ("user1", "A001,B002,C003"),
+        ...     ("user2", "X001"),
+        ...     ("user3", "A001,B002,A001"),  # Duplicate codes
+        ...     ("user4", "Z999,B002"),       # Z999 not in dim table
+        ... ]
+        >>> df = spark.createDataFrame(main_data, ["user", "codes"])
+        
+        >>> # Dimension table with code mappings
+        >>> dim_data = [
+        ...     ("A001", "Product Alpha"),
+        ...     ("B002", "Product Beta"),
+        ...     ("C003", "Product Gamma"),
+        ...     ("X001", "Product X"),
+        ... ]
+        >>> dim_df = spark.createDataFrame(dim_data, ["code", "description"])
+        
+        >>> # Map codes to descriptions (with duplicates)
+        >>> result = add_delimited_codes_descriptions(
+        ...     df, "codes", dim_df, "code", "description"
+        ... )
+        >>> result.show(truncate=False)
+        >>> # +-----+-------------------+------------------------------------------+
+        >>> # | user|              codes|                            codes_desc|
+        >>> # +-----+-------------------+------------------------------------------+
+        >>> # |user1|   A001,B002,C003|Product Alpha,Product Beta,Product Gamma|
+        >>> # |user2|               X001|                             Product X|
+        >>> # |user3|     A001,B002,A001|  Product Alpha,Product Beta,Product Alpha|
+        >>> # |user4|         Z999,B002|                        null,Product Beta|
+        >>> # +-----+-------------------+------------------------------------------+
+        
+        >>> # Map codes to descriptions (distinct only)
+        >>> result_distinct = add_delimited_codes_descriptions(
+        ...     df, "codes", dim_df, "code", "description", distinct=True
+        ... )
+        >>> result_distinct.show(truncate=False)
+        >>> # +-----+-------------------+--------------------------------+
+        >>> # | user|              codes|                     codes_desc|
+        >>> # +-----+-------------------+--------------------------------+
+        >>> # |user1|   A001,B002,C003|Product Alpha,Product Beta,Product Gamma|
+        >>> # |user2|               X001|                       Product X|
+        >>> # |user3|     A001,B002,A001|      Product Alpha,Product Beta|  # Duplicates removed
+        >>> # |user4|         Z999,B002|                  Product Beta|  # null filtered out
+        >>> # +-----+-------------------+--------------------------------+
+        
+        >>> # Custom output column name with semicolon delimiter
+        >>> result_custom = add_delimited_codes_descriptions(
+        ...     df, "codes", dim_df, "code", "description", 
+        ...     delimiter=";", output_col_name="product_names"
+        ... )
+    """
+    # Validate inputs
+    if col_name not in df.columns:
+        raise ValueError(f"Column '{col_name}' not found in main DataFrame")
+    
+    if code_col not in dim_df.columns:
+        raise ValueError(f"Column '{code_col}' not found in dimension DataFrame")
+    
+    if desc_col not in dim_df.columns:
+        raise ValueError(f"Column '{desc_col}' not found in dimension DataFrame")
+    
+    # Set output column name
+    if output_col_name is None:
+        output_col_name = f"{col_name}_desc"
+    
+    if output_col_name in df.columns:
+        raise ValueError(f"Output column '{output_col_name}' already exists in DataFrame")
+    
+    # Create unique row identifier for grouping back
+    df_with_id = df.withColumn("_row_id", F.monotonically_increasing_id())
+    
+    # Split delimited codes into individual rows
+    df_exploded = df_with_id.withColumn(
+        "_individual_code", 
+        F.explode(F.split(F.trim(F.col(col_name)), delimiter))
+    )
+    
+    # Trim whitespace from individual codes
+    df_exploded = df_exploded.withColumn(
+        "_individual_code", 
+        F.trim(F.col("_individual_code"))
+    )
+    
+    # Join with dimension table to get descriptions
+    df_mapped = df_exploded.join(
+        dim_df, 
+        df_exploded._individual_code == dim_df[code_col], 
+        "left"
+    )
+    
+    # Group back by original rows and concatenate descriptions
+    if distinct:
+        # Remove nulls and duplicates, then concatenate
+        agg_expr = F.concat_ws(
+            delimiter, 
+            F.array_distinct(
+                F.filter(
+                    F.collect_list(desc_col), 
+                    lambda x: x.isNotNull()
+                )
+            )
+        )
+    else:
+        # Keep all descriptions including nulls, then concatenate
+        agg_expr = F.concat_ws(delimiter, F.collect_list(desc_col))
+    
+    # Get all original columns except the row_id
+    original_cols = [c for c in df.columns]
+    
+    df_result = df_mapped.groupBy("_row_id", *original_cols) \
+                        .agg(agg_expr.alias(output_col_name)) \
+                        .drop("_row_id")
+    
+    return df_result
+
+
 def cleanup_tables_by_prefix(
     schema_name: str,
     table_prefix: str,
@@ -1026,8 +1233,8 @@ def cleanup_tables_by_prefix(
         
         # Dry run - just show what would be deleted
         if dry_run:
-            print(f"\n🔍 DRY RUN MODE - No tables will be deleted")
-            print(f"   To actually delete these tables, set dry_run=False")
+            print("\n🔍 DRY RUN MODE - No tables will be deleted")
+            print("   To actually delete these tables, set dry_run=False")
             return {
                 'total_tables_found': len(matching_tables),
                 'tables_to_delete': matching_tables,
@@ -1068,7 +1275,7 @@ def cleanup_tables_by_prefix(
         
         
         # Summary
-        print(f"\n📊 CLEANUP SUMMARY:")
+        print("\n📊 CLEANUP SUMMARY:")
         print(f"   Schema: {schema_ref}")
         print(f"   Prefix: {table_prefix}")
         print(f"   Tables found: {len(matching_tables)}")
@@ -1076,7 +1283,7 @@ def cleanup_tables_by_prefix(
         print(f"   Failed deletions: {len(failed_tables)}")
         
         if failed_tables:
-            print(f"\n❌ Failed deletions:")
+            print("\n❌ Failed deletions:")
             for failure in failed_tables:
                 print(f"   - {failure['table']}: {failure['error']}")
         
