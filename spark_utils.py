@@ -1122,8 +1122,12 @@ def add_delimited_codes_descriptions(
     if output_col_name in df.columns:
         raise ValueError(f"Output column '{output_col_name}' already exists in DataFrame")
     
+    # Constants for temporary column names
+    TMP_ROW_ID = "__tmp_row_id__"
+    TMP_CODE = "__tmp_individual_code__"
+    
     # Create unique row identifier for grouping back
-    df_with_id = df.withColumn("_row_id", F.monotonically_increasing_id())
+    df_with_id = df.withColumn(TMP_ROW_ID, F.monotonically_increasing_id())
     
     # Get all original columns in consistent order
     original_cols = [c for c in df.columns]
@@ -1132,7 +1136,7 @@ def add_delimited_codes_descriptions(
     # Separate null/empty rows from non-null rows
     null_rows = df_with_id.filter(
         (F.col(col_name).isNull()) | (F.trim(F.col(col_name)) == "")
-    ).withColumn(output_col_name, F.lit(None).cast("string")).drop("_row_id").select(*result_cols)
+    ).withColumn(output_col_name, F.lit(None).cast("string")).drop(TMP_ROW_ID).select(*result_cols)
     
     # Process non-null, non-empty rows using explode
     non_null_rows = df_with_id.filter(
@@ -1141,20 +1145,20 @@ def add_delimited_codes_descriptions(
     
     # Split delimited codes into individual rows
     df_exploded = non_null_rows.withColumn(
-        "_individual_code", 
+        TMP_CODE, 
         F.explode(F.split(F.trim(F.col(col_name)), delimiter))
     )
     
     # Trim whitespace from individual codes
     df_exploded = df_exploded.withColumn(
-        "_individual_code", 
-        F.trim(F.col("_individual_code"))
+        TMP_CODE, 
+        F.trim(F.col(TMP_CODE))
     )
     
     # Join with dimension table to get descriptions
     df_mapped = df_exploded.join(
         dim_df, 
-        df_exploded._individual_code == dim_df[code_col], 
+        df_exploded[TMP_CODE] == dim_df[code_col], 
         "left"
     )
     
@@ -1174,9 +1178,9 @@ def add_delimited_codes_descriptions(
         # Keep all descriptions including nulls, then concatenate
         agg_expr = F.concat_ws(delimiter, F.collect_list(desc_col))
     
-    non_null_result = df_mapped.groupBy("_row_id", *original_cols) \
+    non_null_result = df_mapped.groupBy(TMP_ROW_ID, *original_cols) \
                               .agg(agg_expr.alias(output_col_name)) \
-                              .drop("_row_id") \
+                              .drop(TMP_ROW_ID) \
                               .select(*result_cols)
     
     # Union null and non-null results
