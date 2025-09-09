@@ -1044,12 +1044,15 @@ def add_delimited_codes_descriptions(
         DataFrame: Original DataFrame with added descriptions column
     
     Examples:
-        >>> # Sample main data with delimited codes
+        >>> # Sample main data with delimited codes (including nulls and empty strings)
         >>> main_data = [
         ...     ("user1", "A001,B002,C003"),
         ...     ("user2", "X001"),
         ...     ("user3", "A001,B002,A001"),  # Duplicate codes
         ...     ("user4", "Z999,B002"),       # Z999 not in dim table
+        ...     ("user5", None),              # Null codes
+        ...     ("user6", ""),                # Empty string
+        ...     ("user7", "   "),             # Whitespace only
         ... ]
         >>> df = spark.createDataFrame(main_data, ["user", "codes"])
         
@@ -1073,7 +1076,10 @@ def add_delimited_codes_descriptions(
         >>> # |user1|   A001,B002,C003|Product Alpha,Product Beta,Product Gamma|
         >>> # |user2|               X001|                             Product X|
         >>> # |user3|     A001,B002,A001|  Product Alpha,Product Beta,Product Alpha|
-        >>> # |user4|         Z999,B002|                        null,Product Beta|
+        >>> # |user4|         Z999,B002|                           Product Beta|
+        >>> # |user5|               null|                                  null|
+        >>> # |user6|                   |                                  null|
+        >>> # |user7|                   |                                  null|
         >>> # +-----+-------------------+------------------------------------------+
         
         >>> # Map codes to descriptions (distinct only)
@@ -1088,6 +1094,9 @@ def add_delimited_codes_descriptions(
         >>> # |user2|               X001|                       Product X|
         >>> # |user3|     A001,B002,A001|      Product Alpha,Product Beta|  # Duplicates removed
         >>> # |user4|         Z999,B002|                  Product Beta|  # null filtered out
+        >>> # |user5|               null|                        null|  # Null input
+        >>> # |user6|                   |                        null|  # Empty input
+        >>> # |user7|                   |                        null|  # Whitespace input
         >>> # +-----+-------------------+--------------------------------+
         
         >>> # Custom output column name with semicolon delimiter
@@ -1116,47 +1125,64 @@ def add_delimited_codes_descriptions(
     # Create unique row identifier for grouping back
     df_with_id = df.withColumn("_row_id", F.monotonically_increasing_id())
     
-    # Split delimited codes into individual rows
-    df_exploded = df_with_id.withColumn(
-        "_individual_code", 
-        F.explode(F.split(F.trim(F.col(col_name)), delimiter))
+    # Separate null/empty rows from non-null rows
+    null_rows = df_with_id.filter(
+        (F.col(col_name).isNull()) | (F.trim(F.col(col_name)) == "")
+    ).withColumn(output_col_name, F.lit(None).cast("string")).drop("_row_id")
+    
+    # Process non-null, non-empty rows using explode
+    non_null_rows = df_with_id.filter(
+        F.col(col_name).isNotNull() & (F.trim(F.col(col_name)) != "")
     )
     
-    # Trim whitespace from individual codes
-    df_exploded = df_exploded.withColumn(
-        "_individual_code", 
-        F.trim(F.col("_individual_code"))
-    )
-    
-    # Join with dimension table to get descriptions
-    df_mapped = df_exploded.join(
-        dim_df, 
-        df_exploded._individual_code == dim_df[code_col], 
-        "left"
-    )
-    
-    # Group back by original rows and concatenate descriptions
-    if distinct:
-        # Remove nulls and duplicates, then concatenate
-        agg_expr = F.concat_ws(
-            delimiter, 
-            F.array_distinct(
-                F.filter(
-                    F.collect_list(desc_col), 
-                    lambda x: x.isNotNull()
+    if non_null_rows.count() > 0:
+        # Split delimited codes into individual rows
+        df_exploded = non_null_rows.withColumn(
+            "_individual_code", 
+            F.explode(F.split(F.trim(F.col(col_name)), delimiter))
+        )
+        
+        # Trim whitespace from individual codes
+        df_exploded = df_exploded.withColumn(
+            "_individual_code", 
+            F.trim(F.col("_individual_code"))
+        )
+        
+        # Join with dimension table to get descriptions
+        df_mapped = df_exploded.join(
+            dim_df, 
+            df_exploded._individual_code == dim_df[code_col], 
+            "left"
+        )
+        
+        # Group back by original rows and concatenate descriptions
+        if distinct:
+            # Remove nulls and duplicates, then concatenate
+            agg_expr = F.concat_ws(
+                delimiter, 
+                F.array_distinct(
+                    F.filter(
+                        F.collect_list(desc_col), 
+                        lambda x: x.isNotNull()
+                    )
                 )
             )
-        )
+        else:
+            # Keep all descriptions including nulls, then concatenate
+            agg_expr = F.concat_ws(delimiter, F.collect_list(desc_col))
+        
+        # Get all original columns except the row_id
+        original_cols = [c for c in df.columns]
+        
+        non_null_result = df_mapped.groupBy("_row_id", *original_cols) \
+                                  .agg(agg_expr.alias(output_col_name)) \
+                                  .drop("_row_id")
     else:
-        # Keep all descriptions including nulls, then concatenate
-        agg_expr = F.concat_ws(delimiter, F.collect_list(desc_col))
+        # Handle case where all rows are null/empty
+        non_null_result = df.limit(0).withColumn(output_col_name, F.lit(None).cast("string"))
     
-    # Get all original columns except the row_id
-    original_cols = [c for c in df.columns]
-    
-    df_result = df_mapped.groupBy("_row_id", *original_cols) \
-                        .agg(agg_expr.alias(output_col_name)) \
-                        .drop("_row_id")
+    # Union null and non-null results
+    df_result = null_rows.union(non_null_result)
     
     return df_result
 
