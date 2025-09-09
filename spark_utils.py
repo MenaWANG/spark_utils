@@ -1125,10 +1125,14 @@ def add_delimited_codes_descriptions(
     # Create unique row identifier for grouping back
     df_with_id = df.withColumn("_row_id", F.monotonically_increasing_id())
     
+    # Get all original columns in consistent order
+    original_cols = [c for c in df.columns]
+    result_cols = original_cols + [output_col_name]
+    
     # Separate null/empty rows from non-null rows
     null_rows = df_with_id.filter(
         (F.col(col_name).isNull()) | (F.trim(F.col(col_name)) == "")
-    ).withColumn(output_col_name, F.lit(None).cast("string")).drop("_row_id")
+    ).withColumn(output_col_name, F.lit(None).cast("string")).drop("_row_id").select(*result_cols)
     
     # Process non-null, non-empty rows using explode
     non_null_rows = df_with_id.filter(
@@ -1170,12 +1174,10 @@ def add_delimited_codes_descriptions(
         # Keep all descriptions including nulls, then concatenate
         agg_expr = F.concat_ws(delimiter, F.collect_list(desc_col))
     
-    # Get all original columns except the row_id
-    original_cols = [c for c in df.columns]
-    
     non_null_result = df_mapped.groupBy("_row_id", *original_cols) \
                               .agg(agg_expr.alias(output_col_name)) \
-                              .drop("_row_id")
+                              .drop("_row_id") \
+                              .select(*result_cols)
     
     # Union null and non-null results
     df_result = null_rows.union(non_null_result)
