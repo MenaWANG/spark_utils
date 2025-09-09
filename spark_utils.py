@@ -1135,51 +1135,47 @@ def add_delimited_codes_descriptions(
         F.col(col_name).isNotNull() & (F.trim(F.col(col_name)) != "")
     )
     
-    if non_null_rows.count() > 0:
-        # Split delimited codes into individual rows
-        df_exploded = non_null_rows.withColumn(
-            "_individual_code", 
-            F.explode(F.split(F.trim(F.col(col_name)), delimiter))
-        )
-        
-        # Trim whitespace from individual codes
-        df_exploded = df_exploded.withColumn(
-            "_individual_code", 
-            F.trim(F.col("_individual_code"))
-        )
-        
-        # Join with dimension table to get descriptions
-        df_mapped = df_exploded.join(
-            dim_df, 
-            df_exploded._individual_code == dim_df[code_col], 
-            "left"
-        )
-        
-        # Group back by original rows and concatenate descriptions
-        if distinct:
-            # Remove nulls and duplicates, then concatenate
-            agg_expr = F.concat_ws(
-                delimiter, 
-                F.array_distinct(
-                    F.filter(
-                        F.collect_list(desc_col), 
-                        lambda x: x.isNotNull()
-                    )
+    # Split delimited codes into individual rows
+    df_exploded = non_null_rows.withColumn(
+        "_individual_code", 
+        F.explode(F.split(F.trim(F.col(col_name)), delimiter))
+    )
+    
+    # Trim whitespace from individual codes
+    df_exploded = df_exploded.withColumn(
+        "_individual_code", 
+        F.trim(F.col("_individual_code"))
+    )
+    
+    # Join with dimension table to get descriptions
+    df_mapped = df_exploded.join(
+        dim_df, 
+        df_exploded._individual_code == dim_df[code_col], 
+        "left"
+    )
+    
+    # Group back by original rows and concatenate descriptions
+    if distinct:
+        # Remove nulls and duplicates, then concatenate
+        agg_expr = F.concat_ws(
+            delimiter, 
+            F.array_distinct(
+                F.filter(
+                    F.collect_list(desc_col), 
+                    lambda x: x.isNotNull()
                 )
             )
-        else:
-            # Keep all descriptions including nulls, then concatenate
-            agg_expr = F.concat_ws(delimiter, F.collect_list(desc_col))
-        
-        # Get all original columns except the row_id
-        original_cols = [c for c in df.columns]
-        
-        non_null_result = df_mapped.groupBy("_row_id", *original_cols) \
-                                  .agg(agg_expr.alias(output_col_name)) \
-                                  .drop("_row_id")
+        )
     else:
-        # Handle case where all rows are null/empty
-        non_null_result = df.limit(0).withColumn(output_col_name, F.lit(None).cast("string"))
+        # Keep all descriptions including nulls, then concatenate
+        agg_expr = F.concat_ws(delimiter, F.collect_list(desc_col))
+    
+    # Get all original columns except the row_id
+    original_cols = [c for c in df.columns]
+    
+    non_null_result = df_mapped.groupBy("_row_id", *original_cols) \
+                              .agg(agg_expr.alias(output_col_name)) \
+                              .drop("_row_id")
     
     # Union null and non-null results
     df_result = null_rows.union(non_null_result)
