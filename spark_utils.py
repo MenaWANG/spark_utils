@@ -954,7 +954,7 @@ def union_with_historical_data(
     return result
 
 
-def count_delimited_items(col_name: str, delimiter: str = ",", distinct: bool = False):
+def count_delimited_items(col_name: str, delimiter: str = ",", distinct: bool = False, output_col_name: Optional[str] = None):
     """
     Count number of items in delimited string column.
     
@@ -962,6 +962,7 @@ def count_delimited_items(col_name: str, delimiter: str = ",", distinct: bool = 
         col_name (str): Name of the column containing delimited string
         delimiter (str, optional): Delimiter to split on. Default is ",".
         distinct (bool, optional): If True, count only unique items. Default is False.
+        output_col_name (str, optional): Name for the output column. If None, uses "{col_name}_count".
     
     Returns:
         pyspark.sql.Column: New column with count of delimited items
@@ -971,8 +972,9 @@ def count_delimited_items(col_name: str, delimiter: str = ",", distinct: bool = 
         >>> data = [
         ...     ("user1", "A001,B002,C003"),        # 3 items
         ...     ("user2", "X001"),                  # 1 item
-        ...     ("user3", ""),                      # 1 item (empty string becomes [""])
+        ...     ("user3", ""),                      # 0 items (empty string)
         ...     ("user4", "A001,B002,A001,C003"),   # 4 items (3 distinct)
+        ...     ("user5", None),                    # 0 items (null)
         ... ]
         >>> df = spark.createDataFrame(data, ["user", "codes"])
         
@@ -981,10 +983,11 @@ def count_delimited_items(col_name: str, delimiter: str = ",", distinct: bool = 
         >>> # +-----+-------------------+------------+
         >>> # | user|              codes| codes_count|
         >>> # +-----+-------------------+------------+
-        >>> # |user1|   A001,B002,C003|          3|
+        >>> # |user1|     A001,B002,C003|          3|
         >>> # |user2|               X001|          1|
-        >>> # |user3|                   |          1|
+        >>> # |user3|                   |          0|
         >>> # |user4| A001,B002,A001,C003|          4|
+        >>> # |user5|               null|          0|
         >>> # +-----+-------------------+------------+
         
         >>> # Using distinct count
@@ -992,10 +995,11 @@ def count_delimited_items(col_name: str, delimiter: str = ",", distinct: bool = 
         >>> # +-----+-------------------+------------+
         >>> # | user|              codes| codes_count|
         >>> # +-----+-------------------+------------+
-        >>> # |user1|   A001,B002,C003|          3|
+        >>> # |user1|     A001,B002,C003|          3|
         >>> # |user2|               X001|          1|
-        >>> # |user3|                   |          1|
-        >>> # |user4| A001,B002,A001,C003|          3|  # Duplicates removed
+        >>> # |user3|                   |          0|
+        >>> # |user4| A001,B002,A001,C003|         3|  # Duplicates removed
+        >>> # |user5|               null|          0|
         >>> # +-----+-------------------+------------+
         
         >>> # Using semicolon delimiter with distinct count
@@ -1007,13 +1011,39 @@ def count_delimited_items(col_name: str, delimiter: str = ",", distinct: bool = 
         >>> # +-----+-------------------+------------+
         >>> # |user1| A001;B002;A001;C003|          3|  # A001 appears twice, counted once
         >>> # +-----+-------------------+------------+
+        
+        >>> # Custom output column name
+        >>> df.select("*", count_delimited_items("codes", output_col_name="num_items")).show()
+        >>> # +-----+-------------------+---------+
+        >>> # | user|              codes|num_items|
+        >>> # +-----+-------------------+---------+
+        >>> # |user1|     A001,B002,C003|        3|
+        >>> # |user2|               X001|        1|
+        >>> # |user3|                   |        0|
+        >>> # |user4| A001,B002,A001,C003|        4|
+        >>> # |user5|               null|        0|
+        >>> # +-----+-------------------+---------+
     """
+    # Set output column name
+    if output_col_name is None:
+        output_col_name = f"{col_name}_count"
+
+    # Handle null/empty values by returning 0
     if distinct:
         # Split, convert to set to remove duplicates, then count
-        return F.size(F.array_distinct(F.split(F.col(col_name), delimiter))).alias(f"{col_name}_count")
+        return F.when(
+            (F.col(col_name).isNull()) | (F.trim(F.col(col_name)) == ""),
+            F.lit(0)
+        ).otherwise(
+            F.size(F.array_distinct(F.split(F.col(col_name), delimiter)))  # Use array_distinct for distinct case
+        ).alias(output_col_name)
     else:
-        # Original behavior - count all items including duplicates
-        return F.size(F.split(F.col(col_name), delimiter)).alias(f"{col_name}_count")
+        return F.when(
+            (F.col(col_name).isNull()) | (F.trim(F.col(col_name)) == ""),
+            F.lit(0)
+        ).otherwise(
+            F.size(F.split(F.col(col_name), delimiter))
+        ).alias(output_col_name)
 
 
 def add_delimited_codes_descriptions(
