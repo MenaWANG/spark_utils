@@ -377,7 +377,7 @@ def deduplicate_by_rank(
     ascending: bool = False,
     tiebreaker_col: Optional[str] = None,
     verbose: bool = False,
-) -> DataFrame:
+    ) -> DataFrame:
     """
     Deduplicate rows by keeping the best-ranked row per group of id_cols,
     optionally breaking ties by preferring non-missing tiebreaker_col.
@@ -486,7 +486,7 @@ def deduplicate_by_rank(
 
 def filter_df_by_strings(
     df: DataFrame, col_name: str, search_strings: List[str]
-) -> DataFrame:
+    ) -> DataFrame:
     """
     Filter a DataFrame to find rows where the specified column contains
     any of the given strings (case-insensitive).
@@ -551,7 +551,7 @@ def value_counts_with_pct(df: DataFrame, column_name: str) -> DataFrame:
 
 def transform_date_cols(
     df: DataFrame, date_cols: List[str], str_date_format: str = "ddMMMyyyy"
-) -> DataFrame:
+    ) -> DataFrame:
     """
     Transforms specified columns in a DataFrame to date format.
 
@@ -581,7 +581,7 @@ def filter_by_date(
     min_date: str,
     max_date: str,
     original_date_format: str = "ddMMMyyyy",
-) -> DataFrame:
+    ) -> DataFrame:
     """
     Filter the DataFrame to include only rows where the specified date column is within the range [min_date, max_date].
 
@@ -640,7 +640,7 @@ def get_distinct_values(df: DataFrame, column_name: str) -> list:
 
 def top_rows_for_ids(
     df: DataFrame, id_list: list, value_field: str, ascending: bool = False
-) -> DataFrame:
+    ) -> DataFrame:
     """
     Find all records for unique combination of id_list, then sort by a value field and take the top row for each id combination.
 
@@ -710,7 +710,7 @@ def union_tables_by_prefix(
     source_schema: Optional[str] = None,
     order_by_col: Optional[Union[str, List[str]]] = None,
     drop_duplicates: bool = False
-) -> None:
+    ) -> None:
     """
     Safely combine multiple tables with the same prefix into a single table.
     Ensure the target table doesn't exist or is OK to overwrite before running.
@@ -842,7 +842,7 @@ def union_with_historical_data(
     date_col: str = "date",
     sequence_col: str = "record_sequence",
     only_with_history: bool = False
-) -> DataFrame:
+    ) -> DataFrame:
     """
     Union table_new with historical data from table_historical and add a sequence column to track 
     chronological order. Table_new records get sequence=1, and historical records get 
@@ -1055,7 +1055,7 @@ def add_delimited_codes_descriptions(
     delimiter: str = ",",
     distinct: bool = False,
     output_col_name: Optional[str] = None
-) -> DataFrame:
+    ) -> DataFrame:
     """
     Add a column with descriptions for delimited codes using a dimension table.
     
@@ -1225,7 +1225,7 @@ def cleanup_tables_by_prefix(
     catalog_name: Optional[str] = None,
     dry_run: bool = True,
     confirm_deletion: bool = True
-) -> Dict[str, Any]:
+    ) -> Dict[str, Any]:
     """
     Clean up all tables that start with a specific prefix in a Unity Catalog schema.
     
