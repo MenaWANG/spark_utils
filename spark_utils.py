@@ -841,43 +841,67 @@ def union_with_historical_data(
     join_keys: List[str] = ["id1", "id2"],
     date_col: str = "date",
     sequence_col: str = "record_sequence",
-    only_with_history: bool = False
-    ) -> DataFrame:
+    only_with_history: bool = False,
+    newest_first: bool = True,
+) -> DataFrame:
     """
-    Union table_new with historical data from table_historical and add a sequence column to track 
-    chronological order. Table_new records get sequence=1, and historical records get 
-    sequence values 2, 3, etc. based on chronological order (most recent historical = 2).
-    
-    Smart Filtering Logic:
-    1. Only historical records from table_historical that have matching join_keys in table_new are included
-    2. Only historical records where date_col < corresponding table_new date are included
-    3. This ensures we get truly historical data that's both relevant and chronologically valid
-    
-    Safe Schema Handling:
-    - Missing columns are filled with null values to enable clean union operations
-    - Column ordering is standardized before union to prevent schema mismatch errors
-        
-    Parameters:
-        table_new (DataFrame): The primary DataFrame (current/latest records)
-        table_historical (DataFrame): The DataFrame containing historical data
-        join_keys (List[str]): List of column names to group by. Default is ["id1", "id2"]
-        date_col (str): The date column name to order by. Default is "date"
-        sequence_col (str): Name for the sequence column. Default is "record_sequence"
-        only_with_history (bool): If True, only keep records from table_new that have 
-                                 matching historical records. If False, keep all records 
-                                 from table_new. Default is False.
-    
-    Returns:
-        DataFrame: Combined DataFrame with sequence column showing chronological order,
-                  containing records based on only_with_history parameter,
-                  ordered by join_keys then sequence_col for easy timeline viewing        
+    Union table_new with historical records from table_historical and add a sequence
+    column that orders records chronologically within each key group.
 
+    Assumptions:
+    ------------
+    * Records where historical.date == new.date are intentionally excluded from the result, 
+      that is, only historical.date < new.date are included in the result.
+    
+    Behaviour:
+    ----------
+    * Historical rows are included only if:
+        1. They share join_keys with table_new
+        2. Their date < the corresponding table_new date
+    * If only_with_history=True:
+        Only rows from table_new with matching historical rows are kept.
+      If False (default):
+        All rows from table_new are retained regardless of history.
+
+    Ordering Logic:
+    ---------------
+    `sequence_col` values reflect chronological order:
+        - If newest_first=True (default):
+            Newest record => sequence = 1 (descending order)
+        - If newest_first=False:
+            Oldest record => sequence = 1 (ascending order)
+
+    Schema Handling:
+    ----------------
+    * Columns missing in either table are added as NULLs
+    * Both tables are aligned to identical column order BEFORE union
+
+    
+    Tips for users:
+    ----------------
+    * To handle the special occasion where you may have two records for one join key pair in new (rec_old and rec_new)
+      Just ensure historical data contains all records, both all new records and any older ones, 
+      rec_new will be joined with the rec_old in the result, 
+      and rec_old will be dropped due to no match, unless there are even older records for the pair.   
+
+    Parameters:
+        table_new (DataFrame): Current/latest records
+        table_historical (DataFrame): Historical records
+        join_keys (List[str]): Keys to group by (default ["id1", "id2"])
+        date_col (str): Column containing date values
+        sequence_col (str): Name of sequence column to add
+        only_with_history (bool): Whether to filter table_new to only those with history
+        newest_first (bool): Whether sequence starts at 1 for newest (default True)
+
+    Returns:
+        DataFrame: Combined and chronologically sequenced dataset.
     """
-    # Validate inputs
+
+    # Validate join_keys
     if not isinstance(join_keys, list):
         raise ValueError("join_keys must be a list of column names")
-    
-    # Check if required columns exist
+
+    # Required column checks
     missing_cols_new = [col for col in join_keys + [date_col] if col not in table_new.columns]
     missing_cols_hist = [col for col in join_keys + [date_col] if col not in table_historical.columns]
     
@@ -885,13 +909,14 @@ def union_with_historical_data(
         raise ValueError(f"Missing columns in table_new: {missing_cols_new}")
     if missing_cols_hist:
         raise ValueError(f"Missing columns in table_historical: {missing_cols_hist}")
-    
-    # Check if sequence column name conflicts with existing columns
+
+    # Prevent accidental overwrite of sequence column
     if sequence_col in table_new.columns or sequence_col in table_historical.columns:
-        raise ValueError(f"Sequence column name '{sequence_col}' already exists in one of the tables")
-    
-    # Get all columns from both tables in a deterministic order
-    # Use dict.fromkeys() to maintain order of first appearance while removing duplicates
+        raise ValueError(f"Sequence column '{sequence_col}' already exists in input tables")
+
+
+
+    # All unified columns
     all_columns = list(dict.fromkeys(table_new.columns + table_historical.columns))
     
     # Get table_new with only the join_keys and date for comparison
@@ -911,11 +936,9 @@ def union_with_historical_data(
     
     # Apply filtering logic based on only_with_history parameter
     if only_with_history:
-        # Only keep records from table_new that have matching historical records
         keys_with_history = table_historical_filtered.select(*join_keys).distinct()
         table_new_filtered = table_new.join(keys_with_history, join_keys, "inner")
     else:
-        # Keep all records from table_new (default behavior)
         table_new_filtered = table_new
     
     # Add missing columns to each table with null values
@@ -935,23 +958,23 @@ def union_with_historical_data(
     # Add source identifier to track origin
     table_new_with_source = table_new_normalized.withColumn("_source", F.lit("current"))
     table_historical_with_source = table_historical_normalized.withColumn("_source", F.lit("historical"))
-    
-    # Union the tables
+
+    # Union
     combined_df = table_new_with_source.union(table_historical_with_source)
-    
-    # Create window specification for ranking by date within each group
-    window_spec = Window.partitionBy(*join_keys).orderBy(F.desc(date_col))
-    
-    # Add sequence number using row_number
-    result = combined_df.withColumn(
-        sequence_col, 
-        F.row_number().over(window_spec)
-    ).drop("_source")
-    
-    # Order the result by join_keys and then sequence for intuitive timeline view
-    result = result.orderBy(*join_keys, sequence_col)
-    
+
+    # Sequence direction
+    order_expr = F.desc(date_col) if newest_first else F.asc(date_col)
+
+    window_spec = Window.partitionBy(*join_keys).orderBy(order_expr)
+
+    result = (
+        combined_df.withColumn(sequence_col, F.row_number().over(window_spec))
+                   .drop("_source")
+                   .orderBy(*join_keys, sequence_col)
+    )
+
     return result
+
 
 
 def count_delimited_items(col_name: str, delimiter: str = ",", distinct: bool = False, output_col_name: Optional[str] = None):
