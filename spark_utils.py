@@ -996,7 +996,7 @@ def count_delimited_items(col_name: str, delimiter: str = ",", distinct: bool = 
         >>> # +-----+-------------------+------------+
         >>> # | user|              codes| codes_count|
         >>> # +-----+-------------------+------------+
-        >>> # |user1|     A001,B002,C003|          3|
+        >>> # |user1|   A001,B002,C003|          3|
         >>> # |user2|               X001|          1|
         >>> # |user3|                   |          0|
         >>> # |user4| A001,B002,A001,C003|          4|
@@ -1008,10 +1008,10 @@ def count_delimited_items(col_name: str, delimiter: str = ",", distinct: bool = 
         >>> # +-----+-------------------+------------+
         >>> # | user|              codes| codes_count|
         >>> # +-----+-------------------+------------+
-        >>> # |user1|     A001,B002,C003|          3|
+        >>> # |user1|   A001,B002,C003|          3|
         >>> # |user2|               X001|          1|
         >>> # |user3|                   |          0|
-        >>> # |user4| A001,B002,A001,C003|         3|  # Duplicates removed
+        >>> # |user4| A001,B002,A001,C003|          3|  # Duplicates removed
         >>> # |user5|               null|          0|
         >>> # +-----+-------------------+------------+
         
@@ -1030,33 +1030,37 @@ def count_delimited_items(col_name: str, delimiter: str = ",", distinct: bool = 
         >>> # +-----+-------------------+---------+
         >>> # | user|              codes|num_items|
         >>> # +-----+-------------------+---------+
-        >>> # |user1|     A001,B002,C003|        3|
+        >>> # |user1|   A001,B002,C003|        3|
         >>> # |user2|               X001|        1|
         >>> # |user3|                   |        0|
         >>> # |user4| A001,B002,A001,C003|        4|
         >>> # |user5|               null|        0|
         >>> # +-----+-------------------+---------+
     """
-    # Set output column name
     if output_col_name is None:
         output_col_name = f"{col_name}_count"
 
-    # Handle null/empty values by returning 0
-    if distinct:
-        # Split, convert to set to remove duplicates, then count
-        return F.when(
-            (F.col(col_name).isNull()) | (F.trim(F.col(col_name)) == ""),
-            F.lit(0)
-        ).otherwise(
-            F.size(F.array_distinct(F.split(F.col(col_name), delimiter)))  # Use array_distinct for distinct case
-        ).alias(output_col_name)
-    else:
-        return F.when(
-            (F.col(col_name).isNull()) | (F.trim(F.col(col_name)) == ""),
-            F.lit(0)
-        ).otherwise(
-            F.size(F.split(F.col(col_name), delimiter))
-        ).alias(output_col_name)
+    # Condition for null OR empty/whitespace string
+    is_null_or_empty = (F.col(col_name).isNull()) | (F.trim(F.col(col_name)) == "")
+
+    # Step 1: split into array
+    split_array = F.split(F.col(col_name), delimiter)
+
+    # Step 2: trim whitespace from each token
+    trimmed_array = F.transform(split_array, lambda x: F.trim(x))
+
+    # Step 3: filter out null and empty tokens
+    cleaned_array = F.filter(trimmed_array, lambda x: x.isNotNull() & (x != ""))
+
+    # Step 4: distinct or not
+    final_array = F.array_distinct(cleaned_array) if distinct else cleaned_array
+
+    # Step 5: handle null/empty input safely
+    return (
+        F.when(is_null_or_empty, F.lit(0))
+         .otherwise(F.size(final_array))
+         .alias(output_col_name)
+    )
 
 def add_delimited_codes_descriptions(
     df: DataFrame, 
@@ -1066,10 +1070,11 @@ def add_delimited_codes_descriptions(
     desc_col: str, 
     delimiter: str = ",",
     distinct: bool = False,
-    output_col_name: Optional[str] = None
+    output_col_name: Optional[str] = None,
+    primary_key_cols: Optional[Union[str, List[str]]] = None
 ) -> DataFrame:
     """
-    Add a column with descriptions for delimited codes using a dimension table.
+    Add a column with descriptions for delimited codes using a dimension table containing the descriptions.
     
     Parameters:
         df (DataFrame): The main DataFrame containing delimited codes
@@ -1081,6 +1086,9 @@ def add_delimited_codes_descriptions(
         distinct (bool, optional): If True, remove duplicate descriptions. Default is False.
         output_col_name (str, optional): Name for the new descriptions column. 
                                        If None, uses "{col_name}_desc".
+        primary_key_cols (Union[str, List[str]], optional): Column(s) that uniquely identify rows.
+                                                          If provided, used instead of monotonically_increasing_id()
+                                                          for deterministic results across runs.
     
     Returns:
         DataFrame: Original DataFrame with added descriptions column
@@ -1115,7 +1123,7 @@ def add_delimited_codes_descriptions(
         >>> # +-----+-------------------+------------------------------------------+
         >>> # | user|              codes|                            codes_desc|
         >>> # +-----+-------------------+------------------------------------------+
-        >>> # |user1|   A001,B002,C003|Product Alpha,Product Beta,Product Gamma|
+        >>> # |user1|   A001,B002,C003  |Product Alpha,Product Beta,Product Gamma|
         >>> # |user2|               X001|                             Product X|
         >>> # |user3|     A001,B002,A001|  Product Alpha,Product Beta,Product Alpha|
         >>> # |user4|         Z999,B002|                           Product Beta|
@@ -1146,6 +1154,18 @@ def add_delimited_codes_descriptions(
         ...     df, "codes", dim_df, "code", "description", 
         ...     delimiter=";", output_col_name="product_names"
         ... )
+        
+        >>> # Using primary key for deterministic results across runs
+        >>> result_deterministic = add_delimited_codes_descriptions(
+        ...     df, "codes", dim_df, "code", "description",
+        ...     primary_key_cols="user"  # Single primary key
+        ... )
+        
+        >>> # Multiple column primary key
+        >>> result_multi_pk = add_delimited_codes_descriptions(
+        ...     df, "codes", dim_df, "code", "description",
+        ...     primary_key_cols=["user", "timestamp"]  # Composite primary key
+        ... )
     """
     # Validate inputs
     if col_name not in df.columns:
@@ -1164,12 +1184,29 @@ def add_delimited_codes_descriptions(
     if output_col_name in df.columns:
         raise ValueError(f"Output column '{output_col_name}' already exists in DataFrame")
     
+    # Normalize primary_key_cols to list if provided
+    if primary_key_cols is not None:
+        if isinstance(primary_key_cols, str):
+            primary_key_cols = [primary_key_cols]
+        
+        # Validate primary key columns exist
+        missing_pk_cols = [col for col in primary_key_cols if col not in df.columns]
+        if missing_pk_cols:
+            raise ValueError(f"Primary key column(s) {missing_pk_cols} not found in DataFrame")
+    
     # Constants for temporary column names
     TMP_ROW_ID = "__tmp_row_id__"
     TMP_CODE = "__tmp_individual_code__"
     
     # Create unique row identifier for grouping back
-    df_with_id = df.withColumn(TMP_ROW_ID, F.monotonically_increasing_id())
+    if primary_key_cols is not None:
+        # Use provided primary key for deterministic results
+        df_with_id = df.withColumn(TMP_ROW_ID, F.concat_ws("||", *[F.col(c) for c in primary_key_cols]))
+        grouping_cols = [TMP_ROW_ID]
+    else:
+        # Fall back to monotonically_increasing_id (non-deterministic)
+        df_with_id = df.withColumn(TMP_ROW_ID, F.monotonically_increasing_id())
+        grouping_cols = [TMP_ROW_ID]
     
     # Get all original columns in consistent order
     original_cols = [c for c in df.columns]
@@ -1206,7 +1243,7 @@ def add_delimited_codes_descriptions(
     
     # Group back by original rows and concatenate descriptions
     if distinct:
-        # Remove nulls and duplicates, then concatenate
+        # Remove nulls, trim whitespace, dedupe, then concatenate
         agg_expr = F.concat_ws(
             delimiter, 
             F.array_distinct(
@@ -1217,11 +1254,21 @@ def add_delimited_codes_descriptions(
             )
         )
     else:
-        # Keep all descriptions including nulls, then concatenate
-        agg_expr = F.concat_ws(delimiter, F.collect_list(desc_col))
+        # Remove nulls, trim whitespace, keep duplicates
+        agg_expr = F.concat_ws(
+            delimiter,
+            F.filter(
+                F.transform(F.collect_list(desc_col), lambda x: F.trim(x)),
+                lambda x: x.isNotNull() & (x != "")
+            )
+        )
     
-    non_null_result = df_mapped.groupBy(TMP_ROW_ID, *original_cols) \
-                              .agg(agg_expr.alias(output_col_name)) \
+    # Group by TMP_ROW_ID only and aggregate original columns using F.first() to prevent duplicate
+    non_null_result = df_mapped.groupBy(*grouping_cols) \
+                              .agg(
+                                  agg_expr.alias(output_col_name),
+                                  *[F.first(col).alias(col) for col in original_cols]
+                              ) \
                               .drop(TMP_ROW_ID) \
                               .select(*result_cols)
     
@@ -1370,3 +1417,5 @@ def cleanup_tables_by_prefix(
         print(f"❌ {error_msg}")
         raise RuntimeError(error_msg) from e
 
+
+  
