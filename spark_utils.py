@@ -20,7 +20,6 @@ def get_spark_session():
         from pyspark.sql import SparkSession
         return SparkSession.builder.getOrCreate()
 
-
 def setup_pydantic_v2(custom_path: str = None) -> Optional[str]:
     """
     Setup Pydantic v2 in DBR environment from a custom installation path.  
@@ -105,8 +104,7 @@ def setup_pydantic_v2(custom_path: str = None) -> Optional[str]:
         print(f"💡 Please ensure Pydantic v2 is installed at: {custom_path}")
         return None
 
-
-def round_numeric_cols(df, decimal_places=2):
+def round_numeric_cols(df, decimal_places=2) -> DataFrame:
     """
     Round all numeric columns (float, double, and decimal) in the DataFrame
     to the specified number of decimal places. Integers are not rounded.
@@ -126,8 +124,7 @@ def round_numeric_cols(df, decimal_places=2):
 
     return df
 
-
-def round_given_cols(df, cols, decimal_places=2):
+def round_given_cols(df, cols, decimal_places=2) -> DataFrame:
     """
     Round given numeric columns in the DataFrame to the specified number of decimal places.
 
@@ -142,7 +139,6 @@ def round_given_cols(df, cols, decimal_places=2):
     for col_name in cols:
         df = df.withColumn(col_name, F.round(F.col(col_name), decimal_places))
     return df
-
 
 def shape(df: DataFrame, print_only: bool = True):
     """
@@ -164,7 +160,6 @@ def shape(df: DataFrame, print_only: bool = True):
     else:
         return num_rows, num_cols
 
-
 def print_schema_alphabetically(df: DataFrame):
     """
     Prints the schema of the DataFrame with columns sorted alphabetically (case-insensitive).
@@ -178,7 +173,6 @@ def print_schema_alphabetically(df: DataFrame):
     sorted_columns = sorted(df.columns, key=str.lower)
     sorted_df = df.select(sorted_columns)
     sorted_df.printSchema()
-
 
 def is_primary_key(df: DataFrame, cols: Union[str, List[str]], verbose: bool = True) -> bool:
     """
@@ -267,7 +261,6 @@ def is_primary_key(df: DataFrame, cols: Union[str, List[str]], verbose: bool = T
     finally:
         filtered_df.unpersist()
 
-
 def find_duplicates(df: DataFrame, cols: List[str]) -> DataFrame:
     """
     Function to find duplicate rows based on specified columns.
@@ -308,7 +301,6 @@ def find_duplicates(df: DataFrame, cols: List[str]) -> DataFrame:
             dup_counts.unpersist()
     finally:
         filtered_df.unpersist()
-
 
 def cols_responsible_for_id_dups(spark_df: DataFrame, id_list: List[str]) -> DataFrame:
     """
@@ -377,7 +369,7 @@ def deduplicate_by_rank(
     ascending: bool = False,
     tiebreaker_col: Optional[str] = None,
     verbose: bool = False,
-    ) -> DataFrame:
+) -> DataFrame:
     """
     Deduplicate rows by keeping the best-ranked row per group of id_cols,
     optionally breaking ties by preferring non-missing tiebreaker_col.
@@ -486,7 +478,7 @@ def deduplicate_by_rank(
 
 def filter_df_by_strings(
     df: DataFrame, col_name: str, search_strings: List[str]
-    ) -> DataFrame:
+) -> DataFrame:
     """
     Filter a DataFrame to find rows where the specified column contains
     any of the given strings (case-insensitive).
@@ -515,7 +507,6 @@ def filter_df_by_strings(
     filtered_df = df.filter(combined_filter)
 
     return filtered_df
-
 
 def value_counts_with_pct(df: DataFrame, column_name: str) -> DataFrame:
     """
@@ -548,10 +539,9 @@ def value_counts_with_pct(df: DataFrame, column_name: str) -> DataFrame:
     # Return counts DataFrame with raw numbers
     return counts
 
-
 def transform_date_cols(
     df: DataFrame, date_cols: List[str], str_date_format: str = "ddMMMyyyy"
-    ) -> DataFrame:
+) -> DataFrame:
     """
     Transforms specified columns in a DataFrame to date format.
 
@@ -574,14 +564,13 @@ def transform_date_cols(
 
     return df_
 
-
 def filter_by_date(
     df: DataFrame,
     date_col: str,
     min_date: str,
     max_date: str,
     original_date_format: str = "ddMMMyyyy",
-    ) -> DataFrame:
+) -> DataFrame:
     """
     Filter the DataFrame to include only rows where the specified date column is within the range [min_date, max_date].
 
@@ -619,8 +608,10 @@ def filter_by_date(
 
     return filtered_df
 
-
-def get_distinct_values(df: DataFrame, column_name: str) -> list:
+def get_distinct_values(
+    df: DataFrame, 
+    column_name: str
+) -> list:
     """
     Function to get distinct values of a column in alphabetical order.
 
@@ -637,10 +628,9 @@ def get_distinct_values(df: DataFrame, column_name: str) -> list:
     distinct_values_list = [row[0] for row in distinct_values.collect()]
     return distinct_values_list
 
-
 def top_rows_for_ids(
     df: DataFrame, id_list: list, value_field: str, ascending: bool = False
-    ) -> DataFrame:
+) -> DataFrame:
     """
     Find all records for unique combination of id_list, then sort by a value field and take the top row for each id combination.
 
@@ -672,8 +662,10 @@ def top_rows_for_ids(
 
     return result_df
 
-
-def clean_dollar_cols(df: DataFrame, cols_to_clean: List[str]) -> DataFrame:
+def clean_dollar_cols(
+    df: DataFrame, 
+    cols_to_clean: List[str]
+) -> DataFrame:
     """
     Clean specified columns of a Spark DataFrame by removing '$' symbols, commas,
     and converting to floating-point numbers.
@@ -710,7 +702,7 @@ def union_tables_by_prefix(
     source_schema: Optional[str] = None,
     order_by_col: Optional[Union[str, List[str]]] = None,
     drop_duplicates: bool = False
-    ) -> None:
+) -> None:
     """
     Safely combine multiple tables with the same prefix into a single table.
     Ensure the target table doesn't exist or is OK to overwrite before running.
@@ -975,8 +967,6 @@ def union_with_historical_data(
 
     return result
 
-
-
 def count_delimited_items(col_name: str, delimiter: str = ",", distinct: bool = False, output_col_name: Optional[str] = None):
     """
     Count number of items in delimited string column.
@@ -1068,7 +1058,6 @@ def count_delimited_items(col_name: str, delimiter: str = ",", distinct: bool = 
             F.size(F.split(F.col(col_name), delimiter))
         ).alias(output_col_name)
 
-
 def add_delimited_codes_descriptions(
     df: DataFrame, 
     col_name: str, 
@@ -1078,7 +1067,7 @@ def add_delimited_codes_descriptions(
     delimiter: str = ",",
     distinct: bool = False,
     output_col_name: Optional[str] = None
-    ) -> DataFrame:
+) -> DataFrame:
     """
     Add a column with descriptions for delimited codes using a dimension table.
     
@@ -1241,14 +1230,13 @@ def add_delimited_codes_descriptions(
     
     return df_result
 
-
 def cleanup_tables_by_prefix(
     schema_name: str,
     table_prefix: str,
     catalog_name: Optional[str] = None,
     dry_run: bool = True,
     confirm_deletion: bool = True
-    ) -> Dict[str, Any]:
+) -> Dict[str, Any]:
     """
     Clean up all tables that start with a specific prefix in a Unity Catalog schema.
     
